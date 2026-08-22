@@ -20,6 +20,7 @@ import {
 import { wrapUntrustedContent } from './untrusted.ts'
 import { approvalPromptForCall } from './authorization.ts'
 import { waitForNextDocumentReady } from './navigation.ts'
+import { runDownloadWait, runEval, runListTabs, runNetworkCapture, runScreenshot } from './debugger-tools.ts'
 import type { ApprovalAuthorization, ApprovalPrompt } from '../security/approval.ts'
 
 /** A tool call from the bridge. */
@@ -61,6 +62,14 @@ const NAVIGATION_CANDIDATE_TOOLS = new Set([
   'browser_back',
   'browser_forward',
   'browser_reload',
+])
+/** Reads whose content must not leave the page when sharing is 'off'. */
+const PAGE_CONTENT_READS = new Set([
+  'browser_snapshot',
+  'browser_get_text',
+  'browser_screenshot',
+  'browser_get_table',
+  'browser_network_capture',
 ])
 const NAVIGATION_SNAPSHOT_GUIDANCE = 'Navigation completed and the current page snapshot is included below. Use it directly instead of taking an immediate duplicate snapshot.'
 const pendingInjections = new Map<number, Promise<void>>()
@@ -302,6 +311,13 @@ async function dispatchOnce(
   if (targetStillAllowed?.() === false) return targetChanged()
   if (call.name === 'browser_snapshot') return snapshotAllFrames(tabId, frames, call, budget)
 
+  // Background-level tools never touch the content script.
+  if (call.name === 'browser_screenshot') return runScreenshot(tabId, call.args)
+  if (call.name === 'browser_download_wait') return runDownloadWait(tabId, call.args)
+  if (call.name === 'browser_network_capture') return runNetworkCapture(tabId, call.args)
+  if (call.name === 'browser_list_tabs') return runListTabs()
+  if (call.name === 'browser_eval') return runEval(tabId, call.args)
+
   const frameId = requestedFrame(call.args)
   if (frameId < 0) return { ok: false, error: { code: 'action-failed', message: 'frame must be a non-negative integer.' } }
   const frame = frames.find((candidate) => candidate.frameId === frameId)
@@ -394,7 +410,7 @@ export async function dispatchToolCall(
 ): Promise<ToolAnswer> {
   if (isCancelled(call, signal)) return cancelled()
   // Privacy boundary: with sharing off, no page content may leave the page.
-  if (sharePageContent === 'off' && (call.name === 'browser_snapshot' || call.name === 'browser_get_text')) {
+  if (sharePageContent === 'off' && PAGE_CONTENT_READS.has(call.name)) {
     return { ok: false, error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' } }
   }
   const tab = targetTab ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]

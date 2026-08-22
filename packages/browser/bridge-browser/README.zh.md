@@ -16,6 +16,7 @@ dsh 的**浏览器操作桥**：在宿主 webserver 上挂载一个 **token 认�
 | `maxInteractiveItems` | `number` | 60 | 单次快照交互清单条数上限。 |
 | `sessionWorkspacePath` | `string` | `~/.dsh/browser-sessions` | 扩展创建的会话所用的专用 Host Workspace。插件会在首次调用未显式指定工作区的 `session.create` 时创建并幂等注册该目录；会话的 cwd 随之变为此路径，因此 GUI 会显示 `browser-sessions` 工作区分组。设为 `""` 可让会话继续显示在“未分组”中。 |
 | `deferSessionCreate` | `boolean` | `true` | 会话只在第一条消息时才真正创建：`session.create` 先返回一个内存暂定 ID（不落库），历史读取为空，第一次 `session.prompt` 才创建真实会话（同一 ID、回放原始创建参数）。只打开面板不说话，会在会话库/GUI 里不留任何痕迹。 |
+| `screenshotDir` | `string` | `~/.dsh/browser-screenshots` | `browser_screenshot` 截图落盘目录。 |
 
 工作区分组采用尽力而为方式。如果组合没有 workspace 域、目录创建失败，或 `workspace.create` 拒绝该路径，插件会记录一条警告，并在不注入工作区的情况下发送所有会话创建请求，因此浏览器聊天仍可使用。
 
@@ -63,6 +64,17 @@ npx @deepseek-ai/dsh web
 | `browser_click` / `browser_type` / `browser_press` | 按稳定编号操作清单元素。 |
 | `browser_scroll` / `browser_navigate` / `browser_back` / `browser_forward` / `browser_reload` | 页面移动。 |
 | `browser_get_text` / `browser_wait` | 读区域文本 / 稳定检测。 |
+| `browser_screenshot` | 视口/整页截图（`chrome.debugger`），PNG 落盘后返回文件路径（模型不读图）。 |
+| `browser_click_text` | 按可见文本/CSS 选择器点击元素，绕过编号清单（点 a11y 不可达元素）。 |
+| `browser_wait_for` | 等待某 CSS 选择器出现或页面文本包含子串（导出数据生成/加载完成）。 |
+| `browser_get_table` | 把 HTML 表格提取为 CSV 或 JSON（首行 th 作为表头）。 |
+| `browser_eval` | 在页面 DOM 执行一段 JS 并返回结果文本（兜底；按 origin 信任）。 |
+| `browser_download_wait` | 等待下载完成并返回本地文件路径。 |
+| `browser_network_capture` | 抓取一段窗口内的 XHR/fetch 响应（可过滤 URL 子串），返回 JSON 行。 |
+| `browser_list_tabs` | 列出所有标签页（id / 标题 / URL）。 |
+
+`browser_screenshot` / `browser_download_wait` / `browser_network_capture` / `browser_list_tabs`
+在扩展 background 层执行，不经过 content script；前两者需要 manifest 的 `debugger` / `downloads` 权限。
 
 ## 模型体验
 

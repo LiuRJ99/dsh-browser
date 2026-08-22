@@ -48,6 +48,7 @@ describe('config', () => {
       ...VALID,
       sessionWorkspacePath: dshHomePath('browser-sessions'),
       deferSessionCreate: true,
+      screenshotDir: dshHomePath('browser-screenshots'),
     })
     expect(new Config().sessionWorkspacePath).toBe(dshHomePath('browser-sessions'))
   })
@@ -67,6 +68,7 @@ describe('config', () => {
       maxInteractiveItems: 3,
       sessionWorkspacePath: '',
       deferSessionCreate: false,
+      screenshotDir: dshHomePath('browser-screenshots'),
     })
     expect(new Config({ sessionWorkspacePath: '' }).sessionWorkspacePath).toBe('')
   })

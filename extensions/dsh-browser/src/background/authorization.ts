@@ -5,7 +5,14 @@ import type { TabFrame } from './frames.ts'
 import type { ApprovalPrompt } from '../security/approval.ts'
 import { getUiLocale, type UiLocale } from '../i18n.ts'
 
-const PAGE_READS = new Set(['browser_snapshot', 'browser_get_text'])
+const PAGE_READS = new Set([
+  'browser_snapshot',
+  'browser_get_text',
+  'browser_screenshot',
+  'browser_get_table',
+  'browser_list_tabs',
+  'browser_network_capture',
+])
 const STATE_CHANGING_ACTIONS = new Set([
   'browser_click',
   'browser_type',
@@ -14,6 +21,8 @@ const STATE_CHANGING_ACTIONS = new Set([
   'browser_back',
   'browser_forward',
   'browser_reload',
+  'browser_click_text',
+  'browser_eval',
 ])
 
 /** Return an approval prompt, or undefined when this call needs no prompt. */
@@ -31,9 +40,7 @@ export function approvalPromptForCall(
     return {
       kind: 'read',
       action: call.name,
-      summary: call.name === 'browser_snapshot'
-        ? localized(locale, 'Read the current page and accessible iframes', '读取当前页面及可访问 iframe')
-        : localized(locale, 'Read text from the specified area of the current page', '读取当前页面的指定文本区域'),
+      summary: readSummary(call, locale),
       origins: uniqueOrigins(targetFrames, frames),
       canTrust: false,
     }
@@ -101,6 +108,12 @@ function summarizeAction(call: ToolCall, locale: UiLocale): string {
   const index = typeof call.args.index === 'number' ? call.args.index : '?'
   switch (call.name) {
     case 'browser_click': return localized(locale, `Click element [${index}]${frame}`, `点击元素 [${index}]${frame}`)
+    case 'browser_click_text': return localized(
+      locale,
+      `Click element by text/selector${frame}`,
+      `按文本/选择器点击元素${frame}`,
+    )
+    case 'browser_eval': return localized(locale, 'Run JavaScript in the page', '在页面中执行 JavaScript')
     case 'browser_type': {
       const length = typeof call.args.text === 'string' ? call.args.text.length : 0
       return localized(
@@ -123,6 +136,18 @@ function summarizeAction(call: ToolCall, locale: UiLocale): string {
     case 'browser_forward': return localized(locale, 'Go forward in browser history (destination domain unknown)', '前进到浏览历史下一页（目标域名未知）')
     case 'browser_reload': return localized(locale, 'Reload the current page', '重新加载当前页面')
     default: return call.name
+  }
+}
+
+function readSummary(call: ToolCall, locale: UiLocale): string {
+  switch (call.name) {
+    case 'browser_screenshot': return localized(locale, 'Capture a screenshot of the current page', '截取当前页面截图')
+    case 'browser_get_table': return localized(locale, 'Extract a table from the current page', '提取当前页面表格')
+    case 'browser_list_tabs': return localized(locale, 'List open browser tabs', '列出浏览器标签页')
+    case 'browser_network_capture': return localized(locale, 'Capture page network responses', '抓取页面网络响应')
+    default: return call.name === 'browser_snapshot'
+      ? localized(locale, 'Read the current page and accessible iframes', '读取当前页面及可访问 iframe')
+      : localized(locale, 'Read text from the specified area of the current page', '读取当前页面的指定文本区域')
   }
 }
 
