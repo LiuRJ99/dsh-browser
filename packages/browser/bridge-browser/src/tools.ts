@@ -9,9 +9,19 @@
  * inventory's stable index. Results are single `{ text }` objects rendered as
  * one text ContentBlock.
  *
+ * The extension also exposes background-level tools (`browser_screenshot`,
+ * `browser_network_capture`, `browser_list_tabs`, `browser_download_wait`)
+ * that never touch the content script. `browser_screenshot` is the one
+ * exception to the pure-text contract: it captures a PNG/JPEG in the extension
+ * via `chrome.debugger`, returns the base64 payload over the bridge, and the
+ * plugin writes it to disk so the model gets back a file path instead of the
+ * raw image (the model still sees no pixels).
+ *
  * @module
  */
 
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolDefinition, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { BridgeServer } from './server.ts'
@@ -24,6 +34,8 @@ export interface BrowserToolsOptions {
   snapshotMaxChars: number
   /** Upper bound on interactive inventory items per snapshot. */
   maxInteractiveItems: number
+  /** Directory where `browser_screenshot` writes captured images. Defaults under the dsh home. */
+  screenshotDir?: string
 }
 
 /** Canonical tool result: one text payload. */
@@ -63,6 +75,14 @@ export const BROWSER_TOOL_NAMES = [
   'browser_reload',
   'browser_get_text',
   'browser_wait',
+  'browser_screenshot',
+  'browser_click_text',
+  'browser_wait_for',
+  'browser_get_table',
+  'browser_eval',
+  'browser_download_wait',
+  'browser_network_capture',
+  'browser_list_tabs',
 ] as const
 
 /**
@@ -93,6 +113,8 @@ export function registerBrowserTools(
   for (const tool of defineTools(call, options)) {
     disposers.set(tool.name, ctx.tools.register(tool))
   }
+  const screenshot = defineScreenshotTool(bridge, options, options.screenshotDir ?? '/tmp/dsh-browser-screenshots')
+  disposers.set(screenshot.name, ctx.tools.register(screenshot))
   return disposers
 }
 
@@ -250,6 +272,113 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
     },
   })
 
+  const clickText = (): ToolDefinition => defineTool({
+    name: 'browser_click_text',
+    description: 'Click an element by visible text or CSS selector, bypassing the numbered inventory. Prefer browser_click by index.',
+    parameters: {
+      text: { type: 'string', description: 'Substring of the element\'s visible text to match.' },
+      selector: { type: 'string', description: 'CSS selector of the element to click.' },
+      frame: FRAME_PARAMETER,
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => {
+      const a = args as { text?: string; selector?: string; frame?: number }
+      return call(exec, 'browser_click_text', {
+        ...a.text !== undefined ? { text: a.text } : {},
+        ...a.selector !== undefined ? { selector: a.selector } : {},
+        ...a.frame !== undefined ? { frame: a.frame } : {},
+      })
+    },
+  })
+
+  const waitFor = (): ToolDefinition => defineTool({
+    name: 'browser_wait_for',
+    description: 'Wait until a CSS selector matches or the page text contains a substring; returns on match or timeout.',
+    parameters: {
+      selector: { type: 'string', description: 'CSS selector to wait for.' },
+      text: { type: 'string', description: 'Substring to wait for in page text.' },
+      timeoutMs: { type: 'number', description: 'Maximum wait in milliseconds. Defaults to 10000.' },
+      frame: FRAME_PARAMETER,
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => {
+      const a = args as { selector?: string; text?: string; timeoutMs?: number; frame?: number }
+      return call(exec, 'browser_wait_for', {
+        ...a.selector !== undefined ? { selector: a.selector } : {},
+        ...a.text !== undefined ? { text: a.text } : {},
+        ...a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {},
+        ...a.frame !== undefined ? { frame: a.frame } : {},
+      })
+    },
+  })
+
+  const getTable = (): ToolDefinition => defineTool({
+    name: 'browser_get_table',
+    description: `Extract an HTML table as CSV or JSON; the first th row becomes headers. ${UNTRUSTED_CONTENT_WARNING}`,
+    parameters: {
+      selector: { type: 'string', description: 'CSS selector of the table. Defaults to the first table.' },
+      format: { type: 'string', enum: ['csv', 'json'], description: 'Output format. Defaults to csv.' },
+      frame: FRAME_PARAMETER,
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => {
+      const a = args as { selector?: string; format?: 'csv' | 'json'; frame?: number }
+      return call(exec, 'browser_get_table', {
+        ...a.selector !== undefined ? { selector: a.selector } : {},
+        ...a.format !== undefined ? { format: a.format } : {},
+        ...a.frame !== undefined ? { frame: a.frame } : {},
+      })
+    },
+  })
+
+  const evalTool = (): ToolDefinition => defineTool({
+    name: 'browser_eval',
+    description: 'Run a JavaScript expression in the page DOM and return its value as text. Use as a last resort; prefer typed tools.',
+    parameters: {
+      expression: { type: 'string', required: true, description: 'JavaScript expression; its value is returned as text.' },
+      frame: FRAME_PARAMETER,
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => call(exec, 'browser_eval', args as Record<string, unknown>),
+  })
+
+  const downloadWait = (): ToolDefinition => defineTool({
+    name: 'browser_download_wait',
+    description: 'Wait for a download to complete and return its local file path.',
+    parameters: {
+      timeoutMs: { type: 'number', description: 'Maximum wait in milliseconds. Defaults to 30000.' },
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => call(exec, 'browser_download_wait', args as Record<string, unknown>),
+  })
+
+  const networkCapture = (): ToolDefinition => defineTool({
+    name: 'browser_network_capture',
+    description: 'Capture XHR/fetch responses for a short window as JSON lines; filter by URL substring.',
+    parameters: {
+      durationMs: { type: 'number', description: 'Capture window in milliseconds. Defaults to 3000.' },
+      urlPattern: { type: 'string', description: 'Substring the response URL must contain.' },
+      maxResponses: { type: 'number', description: 'Maximum responses to return. Defaults to 20.' },
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => call(exec, 'browser_network_capture', args as Record<string, unknown>),
+  })
+
+  const listTabs = (): ToolDefinition => defineTool({
+    name: 'browser_list_tabs',
+    description: 'List all open browser tabs with their ids, titles, and URLs.',
+    parameters: {},
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (_args, exec) => call(exec, 'browser_list_tabs', {}),
+  })
+
   return [
     snapshot(),
     click(),
@@ -262,5 +391,51 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
     simple('browser_reload', 'Reload the current page.'),
     getText(),
     wait(),
+    clickText(),
+    waitFor(),
+    getTable(),
+    evalTool(),
+    downloadWait(),
+    networkCapture(),
+    listTabs(),
   ]
+}
+
+/**
+ * The screenshot tool does not fit the generic `{ text }` passthrough: the
+ * extension returns a base64 payload, and the plugin must persist it to disk
+ * before the model sees a result. Its output is still one text block (the file
+ * path), keeping the surface text-only.
+ */
+function defineScreenshotTool(bridge: BridgeServer, options: BrowserToolsOptions, screenshotDir: string): ToolDefinition {
+  return defineTool({
+    name: 'browser_screenshot',
+    description: 'Capture a viewport or full-page screenshot to disk and return the file path (the model sees no pixels).',
+    parameters: {
+      fullPage: { type: 'boolean', description: 'Capture the full scrollable page instead of the viewport. Defaults to false.' },
+      format: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format. Defaults to png.' },
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: async (args, exec) => {
+      const a = args as { fullPage?: boolean; format?: 'png' | 'jpeg' }
+      const sessionId = exec.agent === undefined ? undefined : String(exec.agent.id)
+      const payload = {
+        fullPage: a.fullPage === true,
+        format: a.format === 'jpeg' ? 'jpeg' : 'png',
+      }
+      const result = sessionId === undefined
+        ? await bridge.requestTool('browser_screenshot', payload, exec.signal, options.toolTimeoutMs)
+        : await bridge.requestTool('browser_screenshot', payload, exec.signal, options.toolTimeoutMs, sessionId)
+      const data = (result as { data?: unknown } | undefined)?.data
+      if (typeof data !== 'string' || data === '') {
+        return { text: `browser_screenshot returned no image data: ${JSON.stringify(result)}` }
+      }
+      await mkdir(screenshotDir, { recursive: true })
+      const ext = a.format === 'jpeg' ? 'jpg' : 'png'
+      const file = join(screenshotDir, `shot-${Date.now()}.${ext}`)
+      await writeFile(file, Buffer.from(data, 'base64'))
+      return { text: `Screenshot saved: ${file}` }
+    },
+  })
 }

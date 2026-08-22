@@ -67,6 +67,21 @@ describe('approvalPromptForCall', () => {
     expect(approvalPromptForCall(call('browser_wait'), 'auto', FRAMES, 'zh')).toBeUndefined()
   })
 
+  it('treats new read tools as reads and new actions as state-changing', () => {
+    // Reads: gated only by the sharePageContent 'ask' policy.
+    expect(approvalPromptForCall(call('browser_screenshot'), 'ask', FRAMES, 'zh')?.kind).toBe('read')
+    expect(approvalPromptForCall(call('browser_get_table'), 'auto', FRAMES, 'zh')).toBeUndefined()
+    expect(approvalPromptForCall(call('browser_network_capture'), 'auto', FRAMES, 'zh')).toBeUndefined()
+    // Actions: always prompt (unless a trusted origin covers them).
+    expect(approvalPromptForCall(call('browser_click_text', { text: '导出' }), 'auto', FRAMES, 'zh')).toMatchObject({
+      kind: 'action',
+      canTrust: true,
+    })
+    expect(approvalPromptForCall(call('browser_eval', { expression: '1+1' }), 'auto', FRAMES, 'zh')).toMatchObject({
+      kind: 'action',
+    })
+  })
+
   it('renders approval summaries in English for non-Chinese browsers', () => {
     expect(approvalPromptForCall(call('browser_type', {
       index: 3,

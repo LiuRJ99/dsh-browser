@@ -190,6 +190,12 @@ export async function runAction(action: string, args: Record<string, unknown>, c
       return getTextAction(args)
     case 'browser_wait':
       return waitAction(args, ctx)
+    case 'browser_click_text':
+      return clickTextAction(args, ctx)
+    case 'browser_wait_for':
+      return waitForAction(args)
+    case 'browser_get_table':
+      return getTableAction(args)
     default:
       throw new ActionError('bad-args', `Unknown action: ${action}`)
   }
@@ -403,6 +409,157 @@ async function waitAction(args: Record<string, unknown>, ctx: ActionContext): Pr
   await waitForPageSettled(EXPLICIT_WAIT_SETTLE)
   if (ms > 0) await sleep(ms)
   return withPageDelta(`The page is stable${ms > 0 ? ` after an additional ${ms}ms wait` : ''}.`, ctx)
+}
+
+/** Click an element by visible text and/or CSS selector, bypassing the inventory. */
+async function clickTextAction(args: Record<string, unknown>, ctx: ActionContext): Promise<ActionResult> {
+  const text = typeof args.text === 'string' && args.text !== '' ? args.text : undefined
+  const selector = typeof args.selector === 'string' && args.selector !== '' ? args.selector : undefined
+  if (text === undefined && selector === undefined) {
+    throw new ActionError('bad-args', 'text or selector must be provided.')
+  }
+  const el = findClickable(text, selector)
+  if (el === null) {
+    const what = text !== undefined ? `text "${text}"` : `selector "${selector}"`
+    throw new ActionError('action-failed', `No visible element matched ${what}. Call browser_snapshot or browser_get_text to inspect the page.`)
+  }
+  el.scrollIntoView({ block: 'center', behavior: 'instant' })
+  ;(el as HTMLElement).click()
+  await waitForPageSettled(ACTION_SETTLE)
+  const label = el.textContent?.replace(/\s+/g, ' ').trim().slice(0, 40) ?? el.tagName
+  return withPageDelta(`Clicked ${el.tagName.toLowerCase()} "${label}".`, ctx)
+}
+
+function findClickable(text: string | undefined, selector: string | undefined): Element | null {
+  if (selector !== undefined) {
+    const candidates = [...document.querySelectorAll(selector)]
+    // Prefer a genuinely actionable element; fall back to any visible match.
+    const actionable = candidates.find((el) => el instanceof HTMLElement && isActionable(el) && isLikelyClickable(el))
+    if (actionable !== undefined) return actionable
+    const visible = candidates.find((el) => el instanceof HTMLElement && isActionable(el))
+    if (visible !== undefined) return visible
+    if (text !== undefined) {
+      const byText = candidates.find((el) => visibleText(el).includes(text))
+      if (byText !== undefined) return byText
+    }
+    return null
+  }
+  if (text !== undefined) {
+    // First pass: obvious interactive elements.
+    const interactive = [...document.querySelectorAll(INTERACTIVE_CLICK_SELECTOR)]
+      .find((el) => el instanceof HTMLElement && isActionable(el) && visibleText(el).includes(text))
+    if (interactive !== undefined) return interactive
+    // Second pass: any element whose own text (not descendants) matches, e.g.
+    // a styled div that behaves as an export button but has no button/role.
+    const anyEl = [...document.querySelectorAll('*')]
+      .find((el) => el instanceof HTMLElement
+        && isActionable(el)
+        && ownText(el) === text
+        && isLikelyClickable(el))
+    if (anyEl !== undefined) return anyEl
+    // Third pass: closest ancestor whose text matches exactly (smallest first).
+    const closest = [...document.querySelectorAll('*')]
+      .filter((el) => el instanceof HTMLElement && isActionable(el) && ownText(el).includes(text))
+      .sort((a, b) => (a.textContent?.length ?? 0) - (b.textContent?.length ?? 0))[0]
+    if (closest !== undefined) return closest
+  }
+  return null
+}
+
+/** Candidate tags for the first click-by-text pass. */
+const INTERACTIVE_CLICK_SELECTOR = 'button, a, [role="button"], [role="link"], [onclick], input[type="submit"], input[type="button"], summary, [class*="export"], [class*="btn"], [class*="button"]'
+
+/** The element's own direct text, ignoring descendant text. */
+function ownText(el: Element): string {
+  let own = ''
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) own += node.textContent ?? ''
+  }
+  return own.replace(/\s+/g, ' ').trim()
+}
+
+/** A heuristic for "this element probably reacts to a click". */
+function isLikelyClickable(el: HTMLElement): boolean {
+  if (el.tagName === 'BUTTON' || el.tagName === 'A') return true
+  if (el.hasAttribute('onclick')) return true
+  const role = el.getAttribute('role')
+  if (role === 'button' || role === 'link') return true
+  const cursor = getComputedStyle(el).cursor
+  if (cursor === 'pointer') return true
+  // Styled export-like controls often carry a class hint.
+  const cls = (typeof el.className === 'string' ? el.className : '')
+  return /export|btn|button|action/i.test(cls)
+}
+
+function visibleText(el: Element): string {
+  const text = el instanceof HTMLElement && typeof el.innerText === 'string' ? el.innerText : el.textContent ?? ''
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function isActionable(el: Element): boolean {
+  const style = getComputedStyle(el)
+  if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
+  const rect = el.getBoundingClientRect()
+  return rect.width > 0 && rect.height > 0
+}
+
+/** Wait until a selector matches or page text contains a substring. */
+async function waitForAction(args: Record<string, unknown>): Promise<ActionResult> {
+  const selector = typeof args.selector === 'string' && args.selector !== '' ? args.selector : undefined
+  const text = typeof args.text === 'string' && args.text !== '' ? args.text : undefined
+  if (selector === undefined && text === undefined) {
+    throw new ActionError('bad-args', 'selector or text must be provided.')
+  }
+  const timeout = typeof args.timeoutMs === 'number' && args.timeoutMs > 0 ? args.timeoutMs : 10_000
+  const started = performance.now()
+  const check = (): boolean => {
+    if (selector !== undefined && document.querySelector(selector) !== null) return true
+    if (text !== undefined && (document.body?.textContent ?? '').includes(text)) return true
+    return false
+  }
+  while (!check()) {
+    if (performance.now() - started >= timeout) {
+      const what = selector !== undefined ? `selector "${selector}"` : `text "${text}"`
+      throw new ActionError('action-failed', `Timed out after ${timeout}ms waiting for ${what}.`)
+    }
+    await sleep(100)
+  }
+  const what = selector !== undefined ? `selector "${selector}"` : `text "${text}"`
+  return { text: `Condition met: ${what}.` }
+}
+
+/** Extract an HTML table as CSV or JSON. */
+function getTableAction(args: Record<string, unknown>): ActionResult {
+  const selector = typeof args.selector === 'string' && args.selector !== '' ? args.selector : undefined
+  const format = args.format === 'json' ? 'json' : 'csv'
+  const table = selector !== undefined
+    ? document.querySelector<HTMLTableElement>(selector)
+    : document.querySelector<HTMLTableElement>('table')
+  if (table === null) {
+    throw new ActionError('action-failed', `No table matched${selector !== undefined ? ` selector "${selector}"` : ''}.`)
+  }
+  const rows = [...table.querySelectorAll('tr')]
+    .map((tr) => [...tr.querySelectorAll('th, td')].map((cell) => (cell.textContent ?? '').replace(/\s+/g, ' ').trim()))
+    .filter((cells) => cells.length > 0)
+  if (rows.length === 0) {
+    return { text: '(The table has no rows.)' }
+  }
+  if (format === 'json') {
+    const headers = rows[0]!.map((h, i) => h !== '' ? h : `column_${i + 1}`)
+    const dataRows = rows.slice(1)
+    const objects = dataRows.map((cells) => {
+      const obj: Record<string, string> = {}
+      headers.forEach((header, i) => { obj[header] = cells[i] ?? '' })
+      return obj
+    })
+    return { text: JSON.stringify(objects) }
+  }
+  const escapeCsv = (value: string): string => {
+    if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`
+    return value
+  }
+  const csv = rows.map((cells) => cells.map(escapeCsv).join(',')).join('\n')
+  return { text: csv }
 }
 
 function numberArg(args: Record<string, unknown>, name: string): number {
