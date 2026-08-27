@@ -1,9 +1,27 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { BridgeServer } from '../src/server.ts'
-import { BROWSER_TOOL_NAMES, registerBrowserTools } from '../src/tools.ts'
+import { BROWSER_TOOL_NAMES, MAX_UPLOAD_FILE_BYTES, registerBrowserTools } from '../src/tools.ts'
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+})
 
 describe('registerBrowserTools', () => {
+  async function temporaryFile(name: string, size = 1): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-browser-upload-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, name)
+    await writeFile(file, '')
+    await truncate(file, size)
+    return file
+  }
+
   function makeHarness() {
     const registered: { name: string; definition: Record<string, unknown> }[] = []
     const ctx = {
@@ -37,6 +55,46 @@ describe('registerBrowserTools', () => {
     const result = await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({ index: 3, frame: 7 }, exec)
     expect(requestTool).toHaveBeenCalledWith('browser_click', { index: 3, frame: 7 }, exec.signal, 1_000)
     expect(result).toEqual({ text: 'ok' })
+  })
+
+  it('validates local upload files before crossing the bridge', async () => {
+    const { ctx, bridge, requestTool, registered } = makeHarness()
+    registerBrowserTools(ctx, bridge, { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60 })
+    const tool = registered.find((r) => r.name === 'browser_upload_file')!
+    const file = await temporaryFile('cover.PNG', 37)
+    const exec = { signal: new AbortController().signal }
+
+    await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({
+      index: 9,
+      frame: 4,
+      files: [file],
+      replace: true,
+    }, exec)
+
+    expect(requestTool).toHaveBeenCalledWith('browser_upload_file', {
+      index: 9,
+      frame: 4,
+      files: [file],
+      replace: true,
+      fileMetadata: [{ name: 'cover.PNG', size: 37 }],
+    }, exec.signal, 1_000)
+  })
+
+  it('rejects malformed, unsupported, missing, and oversized upload files without dispatching', async () => {
+    const { ctx, bridge, requestTool, registered } = makeHarness()
+    registerBrowserTools(ctx, bridge, { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60 })
+    const tool = registered.find((r) => r.name === 'browser_upload_file')!
+    const exec = { signal: new AbortController().signal }
+    const run = (args: unknown) => (tool.definition.execute as (value: unknown, e: { signal: AbortSignal }) => Promise<unknown>)(args, exec)
+
+    await expect(run({ index: 1, files: [] })).rejects.toMatchObject({ code: 'bad-args' })
+    await expect(run({ index: 1, files: ['relative.png'] })).rejects.toMatchObject({ code: 'bad-args' })
+    await expect(run({ index: 1, files: ['/tmp/not-allowed.gif'] })).rejects.toMatchObject({ code: 'bad-args' })
+    await expect(run({ index: 1, files: ['/tmp/does-not-exist.png'] })).rejects.toMatchObject({ code: 'bad-args' })
+
+    const oversized = await temporaryFile('large.png', MAX_UPLOAD_FILE_BYTES + 1)
+    await expect(run({ index: 1, files: [oversized] })).rejects.toMatchObject({ code: 'bad-args' })
+    expect(requestTool).not.toHaveBeenCalled()
   })
 
   it('associates browser calls with the owning Agent session', async () => {

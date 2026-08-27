@@ -131,6 +131,55 @@ function elementOrThrow(ids: ElementIds, index: number): Element {
   return el
 }
 
+const FILE_UPLOAD_MARKER = 'data-dsh-upload'
+interface PendingFileUploadMarker {
+  element: HTMLInputElement
+  /** Marker value that existed before the first concurrent upload. */
+  previous: string | null
+}
+const pendingFileUploadMarkers = new Map<string, PendingFileUploadMarker>()
+const originalFileUploadMarkers = new WeakMap<HTMLInputElement, string | null>()
+
+/** Locate an inventoried file input and mark it for the background CDP lookup. */
+export function locateFileInput(
+  args: Record<string, unknown>,
+  ids: ElementIds,
+  nonce: string,
+): { text: string; uploadToken: string } {
+  if (nonce.trim() === '') throw new ActionError('bad-args', 'upload nonce must not be empty.')
+  const index = numberArg(args, 'index')
+  const element = elementOrThrow(ids, index)
+  if (!(element instanceof HTMLInputElement) || element.type.toLowerCase() !== 'file') {
+    throw new ActionError('action-failed', `Element [${index}] is not an input[type=file]. Choose the file input index from browser_snapshot.`)
+  }
+  const previous = originalFileUploadMarkers.has(element)
+    ? originalFileUploadMarkers.get(element) ?? null
+    : element.getAttribute(FILE_UPLOAD_MARKER)
+  if (!originalFileUploadMarkers.has(element)) originalFileUploadMarkers.set(element, previous)
+  element.setAttribute(FILE_UPLOAD_MARKER, nonce)
+  pendingFileUploadMarkers.set(nonce, { element, previous })
+  return { text: `File input [${index}] is ready for upload.`, uploadToken: nonce }
+}
+
+/** Remove a one-time CDP lookup marker and restore any page-owned value. */
+export function clearFileUploadMarker(nonce: string): void {
+  const pending = pendingFileUploadMarkers.get(nonce)
+  if (pending === undefined) return
+  pendingFileUploadMarkers.delete(nonce)
+  const current = pending.element.getAttribute(FILE_UPLOAD_MARKER)
+  if (current !== nonce) return
+  const next = [...pendingFileUploadMarkers.entries()]
+    .reverse()
+    .find(([, candidate]) => candidate.element === pending.element)?.[0]
+  if (next !== undefined) {
+    pending.element.setAttribute(FILE_UPLOAD_MARKER, next)
+    return
+  }
+  if (pending.previous === null) pending.element.removeAttribute(FILE_UPLOAD_MARKER)
+  else pending.element.setAttribute(FILE_UPLOAD_MARKER, pending.previous)
+  originalFileUploadMarkers.delete(pending.element)
+}
+
 /** Error carrying a stable wire code. */
 export class ActionError extends Error {
   constructor(
@@ -213,6 +262,21 @@ function snapshotAction(args: Record<string, unknown>, ctx: ActionContext): Acti
 /** Module-level last snapshot state for delta mode (content-script lifetime). */
 let lastSnapshot: ReturnType<typeof buildSnapshot> | null = null
 
+/** Run page click handlers without allowing a javascript: URL default action. */
+function dispatchClickWithoutDefault(el: HTMLElement): boolean {
+  const suppressDefault = (event: MouseEvent): void => { event.preventDefault() }
+  el.addEventListener('click', suppressDefault, true)
+  try {
+    return el.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    }))
+  } finally {
+    el.removeEventListener('click', suppressDefault, true)
+  }
+}
+
 /** Invalidate delta state after navigation (new document). */
 function resetDeltaState(): void {
   lastSnapshot = null
@@ -238,6 +302,13 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
     const sameFrameTarget = target === '' || target === '_self'
     let href: URL | undefined
     try { href = new URL(el.href) } catch { /* let the native click handle unusual links */ }
+    if (href?.protocol === 'javascript:') {
+      // Native HTMLElement.click() attempts to execute the javascript: URL and
+      // is rejected by the page's CSP. Still dispatch page click handlers, but
+      // suppress the URL's default action so we never trigger inline script.
+      dispatchClickWithoutDefault(el)
+      return { text: `Clicked link [${index}] without executing its javascript: URL.` }
+    }
     const controlledNavigation = sameFrameTarget
       && !el.hasAttribute('download')
       && (href?.protocol === 'http:' || href?.protocol === 'https:')
@@ -424,6 +495,15 @@ async function clickTextAction(args: Record<string, unknown>, ctx: ActionContext
     throw new ActionError('action-failed', `No visible element matched ${what}. Call browser_snapshot or browser_get_text to inspect the page.`)
   }
   el.scrollIntoView({ block: 'center', behavior: 'instant' })
+  if (el instanceof HTMLAnchorElement) {
+    let href: URL | undefined
+    try { href = new URL(el.href) } catch { /* treat unusual links as native clicks */ }
+    if (href?.protocol === 'javascript:') {
+      dispatchClickWithoutDefault(el)
+      const label = el.textContent?.replace(/\s+/g, ' ').trim().slice(0, 40) ?? el.tagName
+      return withPageDelta(`Clicked link "${label}" without executing its javascript: URL.`, ctx)
+    }
+  }
   ;(el as HTMLElement).click()
   await waitForPageSettled(ACTION_SETTLE)
   const label = el.textContent?.replace(/\s+/g, ' ').trim().slice(0, 40) ?? el.tagName

@@ -22,6 +22,13 @@ type DebuggerApi = typeof chrome.debugger
 type Debuggee = { tabId: number }
 
 const MAX_SCREENSHOT_BASE64_CHARS = 50_000_000
+const MAX_UPLOAD_FILE_BYTES = 32 * 1024 * 1024
+const UPLOAD_FILE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
+
+interface UploadFrame {
+  frameId: number
+  documentId?: string
+}
 
 /** Lazily resolve chrome.debugger so callers without the permission never throw at import. */
 function debuggerApi(): DebuggerApi | undefined {
@@ -34,6 +41,71 @@ function unavailable(message: string): ToolAnswer {
 
 function textAnswer(text: string): ToolAnswer {
   return { ok: true, result: { text } }
+}
+
+function uploadBadArgs(message: string): ToolAnswer {
+  return { ok: false, error: { code: 'bad-args', message: `browser_upload_file: ${message}` } }
+}
+
+function uploadFailed(message: string): ToolAnswer {
+  return { ok: false, error: { code: 'action-failed', message: `File upload failed: ${message}` } }
+}
+
+function uploadCancelled(): ToolAnswer {
+  return { ok: false, error: { code: 'bridge-closed', message: 'The file upload was cancelled.' } }
+}
+
+function isUploadCancelled(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
+}
+
+function isAbsoluteLocalPath(value: string): boolean {
+  return value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+}
+
+interface ValidatedDebuggerUpload {
+  index: number
+  files: string[]
+}
+
+/** Lets the dispatcher reuse its normal content-script injection recovery path. */
+export class UploadContentUnavailableError extends Error {
+  constructor() {
+    super('The file input content script is unavailable in the selected frame.')
+    this.name = 'UploadContentUnavailableError'
+  }
+}
+
+function validateDebuggerUploadArgs(args: Record<string, unknown>): ValidatedDebuggerUpload | ToolAnswer {
+  if (typeof args.index !== 'number' || !Number.isInteger(args.index) || args.index < 0) {
+    return uploadBadArgs('index must be a non-negative integer.')
+  }
+  if (!Array.isArray(args.files) || args.files.length === 0) {
+    return uploadBadArgs('files must be a non-empty array of absolute paths.')
+  }
+  const files: string[] = []
+  for (let index = 0; index < args.files.length; index += 1) {
+    const value = args.files[index]
+    if (typeof value !== 'string' || !isAbsoluteLocalPath(value)) {
+      return uploadBadArgs(`files[${index}] must be an absolute path.`)
+    }
+    const dot = value.lastIndexOf('.')
+    const extension = dot < 0 ? '' : value.slice(dot).toLowerCase()
+    if (!UPLOAD_FILE_EXTENSIONS.has(extension)) {
+      return uploadBadArgs(`files[${index}] must use PNG, JPG, JPEG, or WebP.`)
+    }
+    files.push(value)
+  }
+  const metadata = Array.isArray(args.fileMetadata) ? args.fileMetadata : []
+  for (let index = 0; index < metadata.length; index += 1) {
+    const item = metadata[index]
+    if (typeof item !== 'object' || item === null) return uploadBadArgs(`fileMetadata[${index}] is invalid.`)
+    const size = (item as { size?: unknown }).size
+    if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return uploadBadArgs(`fileMetadata[${index}] has an invalid size.`)
+    if (size > MAX_UPLOAD_FILE_BYTES) return uploadBadArgs(`files[${index}] exceeds the 32 MiB per-file limit.`)
+  }
+  if (args.replace !== undefined && typeof args.replace !== 'boolean') return uploadBadArgs('replace must be a boolean.')
+  return { index: args.index, files }
 }
 
 function attachToTab(tabId: number): Promise<void> {
@@ -67,6 +139,162 @@ function sendDebuggerCommand(tabId: number, method: string, params: Record<strin
       else resolve(result)
     })
   })
+}
+
+function uploadNonce(): string {
+  try {
+    return crypto.randomUUID()
+  } catch {
+    return `dsh-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
+function contentTarget(frame: UploadFrame): { frameId: number } | { documentId: string } {
+  return frame.documentId === undefined ? { frameId: frame.frameId } : { documentId: frame.documentId }
+}
+
+function contentUploadFailure(response: unknown): ToolAnswer | undefined {
+  if (typeof response !== 'object' || response === null || (response as { ok?: unknown }).ok !== false) return undefined
+  const error = (response as { error?: { code?: unknown; message?: unknown } }).error
+  const code = error?.code === 'bad-args' ? 'bad-args' : 'action-failed'
+  return {
+    ok: false,
+    error: { code, message: typeof error?.message === 'string' ? error.message : 'The file input could not be prepared.' },
+  }
+}
+
+async function clearUploadMarker(tabId: number, frame: UploadFrame, nonce: string): Promise<void> {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'DSH_FILE_UPLOAD_CLEANUP',
+      nonce,
+    }, contentTarget(frame))
+  } catch {
+    // The frame may have navigated or been removed; its old document no longer
+    // exposes a marker that could affect a later upload.
+  }
+}
+
+/**
+ * Resolve a nonce-marked input in any frame. The DOM query handles the common
+ * top-document path; the Runtime fallback asks each live execution context for
+ * its own node and then converts that object through DOM.requestNode, which is
+ * needed when the target is a cross-origin iframe.
+ */
+async function findMarkedFileInputNode(
+  tabId: number,
+  rootNodeId: number,
+  selector: string,
+): Promise<number | undefined> {
+  const queryResult = await sendDebuggerCommand(tabId, 'DOM.querySelector', {
+    nodeId: rootNodeId,
+    selector,
+  })
+  const directNodeId = (queryResult as { nodeId?: unknown }).nodeId
+  if (typeof directNodeId === 'number' && directNodeId > 0) return directNodeId
+
+  const dbg = debuggerApi()
+  if (dbg === undefined) return undefined
+  const contextIds = new Set<number>()
+  const onEvent = (_source: unknown, method: string, params: unknown): void => {
+    if (method !== 'Runtime.executionContextCreated') return
+    const context = (params as { context?: { id?: unknown } }).context
+    if (typeof context?.id === 'number') contextIds.add(context.id)
+  }
+  dbg.onEvent.addListener(onEvent)
+  try {
+    await sendDebuggerCommand(tabId, 'Runtime.enable', {})
+    const expression = `document.querySelector(${JSON.stringify(selector)})`
+    const candidates = contextIds.size === 0 ? [undefined] : [...contextIds]
+    for (const contextId of candidates) {
+      const result = await sendDebuggerCommand(tabId, 'Runtime.evaluate', {
+        expression,
+        returnByValue: false,
+        ...(contextId === undefined ? {} : { contextId }),
+      })
+      const objectId = (result as { result?: { objectId?: unknown } }).result?.objectId
+      if (typeof objectId !== 'string' || objectId === '') continue
+      const requested = await sendDebuggerCommand(tabId, 'DOM.requestNode', { objectId })
+      const nodeId = (requested as { nodeId?: unknown }).nodeId
+      if (typeof nodeId === 'number' && nodeId > 0) return nodeId
+    }
+    return undefined
+  } finally {
+    dbg.onEvent.removeListener(onEvent)
+  }
+}
+
+/**
+ * Inject validated local files into one inventoried input. The content script
+ * owns the index→element mapping; CDP only sees its one-time nonce marker.
+ */
+export async function runUploadViaDebugger(
+  tabId: number,
+  args: Record<string, unknown>,
+  frame: UploadFrame,
+  signal?: AbortSignal,
+): Promise<ToolAnswer> {
+  const validated = validateDebuggerUploadArgs(args)
+  if ('ok' in validated) return validated
+  if (isUploadCancelled(signal)) return uploadCancelled()
+
+  const nonce = uploadNonce()
+  const selector = `input[type="file"][data-dsh-upload="${nonce}"]`
+  let markerMayExist = true
+  let attached = false
+  try {
+    let prepared: unknown
+    try {
+      prepared = await chrome.tabs.sendMessage(tabId, {
+        type: 'DSH_FILE_UPLOAD_PREPARE',
+        args: { index: validated.index },
+        nonce,
+      }, contentTarget(frame))
+    } catch {
+      throw new UploadContentUnavailableError()
+    }
+    const preparationFailure = contentUploadFailure(prepared)
+    if (preparationFailure !== undefined) return preparationFailure
+    if (typeof prepared !== 'object' || prepared === null
+      || (prepared as { ok?: unknown }).ok !== true
+      || (prepared as { result?: { uploadToken?: unknown } }).result?.uploadToken !== nonce) {
+      return uploadFailed('The content script returned an invalid file-input handle.')
+    }
+    if (isUploadCancelled(signal)) return uploadCancelled()
+
+    try {
+      await attachToTab(tabId)
+      attached = true
+    } catch {
+      return uploadFailed('Chrome could not attach its debugger to the controlled tab.')
+    }
+    if (isUploadCancelled(signal)) return uploadCancelled()
+
+    await sendDebuggerCommand(tabId, 'DOM.enable', {})
+    const documentResult = await sendDebuggerCommand(tabId, 'DOM.getDocument', { depth: -1, pierce: true })
+    const rootNodeId = (documentResult as { root?: { nodeId?: unknown } }).root?.nodeId
+    if (typeof rootNodeId !== 'number' || rootNodeId <= 0) {
+      return uploadFailed('Chrome did not expose the selected document.')
+    }
+    const nodeId = await findMarkedFileInputNode(tabId, rootNodeId, selector)
+    if (nodeId === undefined) {
+      return uploadFailed(`The file input [${validated.index}] no longer exists in the selected document.`)
+    }
+    if (isUploadCancelled(signal)) return uploadCancelled()
+    await sendDebuggerCommand(tabId, 'DOM.setFileInputFiles', {
+      nodeId,
+      files: validated.files,
+    })
+    if (isUploadCancelled(signal)) return uploadCancelled()
+    return textAnswer(`Uploaded ${validated.files.length} file(s) to file input [${validated.index}].`)
+  } catch (error: unknown) {
+    if (error instanceof UploadContentUnavailableError) throw error
+    if (isUploadCancelled(signal)) return uploadCancelled()
+    return uploadFailed('Chrome rejected the selected files or the input changed before injection completed.')
+  } finally {
+    if (markerMayExist) await clearUploadMarker(tabId, frame, nonce)
+    if (attached) detachFromTab(tabId)
+  }
 }
 
 /** Wait for a download initiated on the page to complete and return its path. */

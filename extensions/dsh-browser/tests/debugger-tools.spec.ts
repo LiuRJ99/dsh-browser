@@ -67,7 +67,7 @@ afterEach(() => {
   vi.stubGlobal('chrome', { runtime: { lastError: undefined } })
 })
 
-const { runScreenshot, runDownloadWait, runListTabs, runNetworkCapture, runEval } = await import('../src/background/debugger-tools.ts')
+const { runScreenshot, runDownloadWait, runListTabs, runNetworkCapture, runEval, runUploadViaDebugger } = await import('../src/background/debugger-tools.ts')
 
 describe('runScreenshot', () => {
   it('attaches, captures, and returns base64 data', async () => {
@@ -155,5 +155,51 @@ describe('runEval', () => {
     const answer = await runEval(1, { expression: '' })
     expect(answer.ok).toBe(false)
     if (!answer.ok) expect(answer.error?.code).toBe('bad-args')
+  })
+})
+
+describe('runUploadViaDebugger', () => {
+  it('marks the frame input, injects files through CDP, and always cleans up', async () => {
+    const sendMessage = vi.fn(async (_tabId: number, message: unknown, _target: unknown) => {
+      const type = (message as { type?: string }).type
+      return type === 'DSH_FILE_UPLOAD_PREPARE'
+        ? { ok: true, result: { text: 'ready', uploadToken: (message as { nonce: string }).nonce } }
+        : { ok: true, result: { text: 'cleaned' } }
+    })
+    Object.assign(globalThis.chrome.tabs, { sendMessage })
+    debuggerMock.sendCommand.mockImplementation((_target, method, params, cb) => {
+      lastCommand = { method, params }
+      chrome.runtime.lastError = undefined
+      if (method === 'DOM.getDocument') cb({ root: { nodeId: 1 } })
+      else if (method === 'DOM.querySelector') cb({ nodeId: 2 })
+      else cb({})
+    })
+
+    const answer = await runUploadViaDebugger(1, {
+      index: 7,
+      files: ['/tmp/cover.png'],
+      fileMetadata: [{ name: 'cover.png', size: 1234 }],
+    }, { frameId: 0, documentId: 'frame-document' })
+
+    expect(answer).toEqual({ ok: true, result: { text: 'Uploaded 1 file(s) to file input [7].' } })
+    expect(sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ type: 'DSH_FILE_UPLOAD_PREPARE' }), { documentId: 'frame-document' })
+    expect(sendMessage).toHaveBeenLastCalledWith(1, expect.objectContaining({ type: 'DSH_FILE_UPLOAD_CLEANUP' }), { documentId: 'frame-document' })
+    expect(debuggerMock.sendCommand.mock.calls.map((call) => call[1])).toEqual([
+      'DOM.enable',
+      'DOM.getDocument',
+      'DOM.querySelector',
+      'DOM.setFileInputFiles',
+    ])
+    expect(lastCommand?.params).toMatchObject({ nodeId: 2, files: ['/tmp/cover.png'] })
+    expect(debuggerMock.detach).toHaveBeenCalledWith({ tabId: 1 })
+  })
+
+  it('returns bad-args before touching the content script for invalid paths', async () => {
+    const sendMessage = vi.fn()
+    Object.assign(globalThis.chrome.tabs, { sendMessage })
+    const answer = await runUploadViaDebugger(1, { index: 1, files: ['/tmp/not-an-image.gif'] }, { frameId: 0 })
+    expect(answer).toMatchObject({ ok: false, error: { code: 'bad-args' } })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(debuggerMock.attach).not.toHaveBeenCalled()
   })
 })

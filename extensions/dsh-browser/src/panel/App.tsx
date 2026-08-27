@@ -642,6 +642,7 @@ export function App(): React.JSX.Element {
         trustedActionOrigins: raw?.trustedActionOrigins ?? [],
         approvalNotifications: raw?.approvalNotifications ?? true,
         autoResumeSession: raw?.autoResumeSession ?? true,
+        autoFollowActiveTab: raw?.autoFollowActiveTab ?? false,
       })
     })
   }, [])
@@ -1583,6 +1584,21 @@ export function App(): React.JSX.Element {
               onChange={(event) => setSettings((current) => current === null
                 ? current
                 : { ...current, autoResumeSession: event.target.checked })}
+            />
+            <span className="setting-toggle-control" aria-hidden="true"><span /></span>
+          </label>
+          <label className="setting-toggle">
+            <span className="setting-toggle-copy">
+              <strong>{copy.settings.autoFollowActiveTab}</strong>
+              <small>{copy.settings.autoFollowActiveTabHelp}</small>
+            </span>
+            <input
+              className="setting-toggle-input"
+              type="checkbox"
+              checked={settings?.autoFollowActiveTab ?? false}
+              onChange={(event) => setSettings((current) => current === null
+                ? current
+                : { ...current, autoFollowActiveTab: event.target.checked })}
             />
             <span className="setting-toggle-control" aria-hidden="true"><span /></span>
           </label>

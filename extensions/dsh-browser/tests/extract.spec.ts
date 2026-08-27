@@ -73,6 +73,11 @@ describe('collectInteractive', () => {
     const elements = collectInteractive(document)
     expect(elements.map((el) => el.tagName.toLowerCase())).toEqual(['a', 'input', 'button'])
   })
+
+  it('keeps hidden file inputs addressable for upload handshakes', () => {
+    document.body.innerHTML = '<label for="cover">Cover</label><input id="cover" type="file" style="display:none">'
+    expect(collectInteractive(document)).toEqual([document.querySelector('input')])
+  })
 })
 
 describe('mainText', () => {

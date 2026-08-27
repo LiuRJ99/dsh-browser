@@ -547,4 +547,52 @@ describe('dispatchToolCall', () => {
     expect(seen).toEqual([{ frameId: 0, delta: true }, { frameId: 6, delta: false }])
     expect(chromeMock.getAllFrames).toHaveBeenCalledTimes(3)
   })
+
+  it('routes upload preparation and cleanup to the snapshotted frame, not DSH_ACTION', async () => {
+    const uploadMessages: unknown[] = []
+    const chromeMock = mockChrome({
+      tab: { id: 77, url: 'https://upload.example/' },
+      respond: (message) => {
+        uploadMessages.push(message)
+        const type = (message as { type?: string }).type
+        if (type === 'DSH_FILE_UPLOAD_PREPARE') {
+          return { ok: true, result: { text: 'ready', uploadToken: (message as { nonce: string }).nonce } }
+        }
+        if (type === 'DSH_FILE_UPLOAD_CLEANUP') return { ok: true, result: { text: 'cleaned' } }
+        return { ok: true, result: { text: 'page' } }
+      },
+    })
+    const debuggerApi = {
+      attach: vi.fn((_target: unknown, _version: string, callback: () => void) => callback()),
+      detach: vi.fn(),
+      sendCommand: vi.fn((_target: unknown, method: string, _params: Record<string, unknown>, callback: (result: unknown) => void) => {
+        if (method === 'DOM.getDocument') callback({ root: { nodeId: 1 } })
+        else if (method === 'DOM.querySelector') callback({ nodeId: 2 })
+        else callback({})
+      }),
+      onEvent: { addListener: vi.fn(), removeListener: vi.fn() },
+    }
+    Object.assign(chrome, { debugger: debuggerApi })
+
+    await dispatchToolCall(CALL, 'auto')
+    const answer = await dispatchToolCall({
+      id: 'upload',
+      name: 'browser_upload_file',
+      args: { index: 3, files: ['/tmp/cover.png'], fileMetadata: [{ name: 'cover.png', size: 10 }] },
+    }, 'auto', undefined, async () => 'approved')
+
+    expect(answer).toEqual({ ok: true, result: { text: 'Uploaded 1 file(s) to file input [3].' } })
+    expect(uploadMessages.map((message) => (message as { type?: string }).type)).toEqual([
+      'DSH_ACTION',
+      'DSH_FILE_UPLOAD_PREPARE',
+      'DSH_FILE_UPLOAD_CLEANUP',
+    ])
+    expect(chromeMock.sendMessage).toHaveBeenLastCalledWith(77, expect.objectContaining({ type: 'DSH_FILE_UPLOAD_CLEANUP' }), { documentId: 'document-77' })
+    expect(debuggerApi.sendCommand.mock.calls.map((call) => call[1])).toEqual([
+      'DOM.enable',
+      'DOM.getDocument',
+      'DOM.querySelector',
+      'DOM.setFileInputFiles',
+    ])
+  })
 })

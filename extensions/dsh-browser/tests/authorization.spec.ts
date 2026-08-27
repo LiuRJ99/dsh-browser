@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { approvalPromptForCall, originFromUrl } from '../src/background/authorization.ts'
+import { actionCoveredByTrustedOrigins } from '../src/security/trusted-origins.ts'
 import type { TabFrame } from '../src/background/frames.ts'
 import type { ToolCall } from '../src/background/tools.ts'
 
@@ -80,6 +81,27 @@ describe('approvalPromptForCall', () => {
     expect(approvalPromptForCall(call('browser_eval', { expression: '1+1' }), 'auto', FRAMES, 'zh')).toMatchObject({
       kind: 'action',
     })
+  })
+
+  it('allows trusted origins to cover uploads while redacting absolute paths', () => {
+    const absolutePath = '/Users/alice/private/cover.png'
+    const prompt = approvalPromptForCall(call('browser_upload_file', {
+      frame: 4,
+      index: 7,
+      files: [absolutePath],
+      fileMetadata: [{ name: 'cover.png', size: 2048 }],
+    }), 'auto', FRAMES, 'en')
+
+    expect(prompt).toMatchObject({
+      kind: 'action',
+      origins: ['https://login.example.net'],
+      canTrust: true,
+    })
+    expect(actionCoveredByTrustedOrigins(prompt!, ['https://login.example.net'])).toBe(true)
+    expect(prompt?.summary).toContain('cover.png')
+    expect(prompt?.summary).toContain('2048 bytes')
+    expect(prompt?.summary).toContain('[7]')
+    expect(prompt?.summary).not.toContain(absolutePath)
   })
 
   it('renders approval summaries in English for non-Chinese browsers', () => {

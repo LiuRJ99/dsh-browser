@@ -81,6 +81,8 @@ export interface Settings {
   approvalNotifications: boolean
   /** Restore the last active browser conversation when the panel reopens. */
   autoResumeSession: boolean
+  /** Follow the active tab automatically instead of showing a handoff prompt. */
+  autoFollowActiveTab: boolean
 }
 
 const SETTINGS_DEFAULTS: Settings = {
@@ -91,6 +93,7 @@ const SETTINGS_DEFAULTS: Settings = {
   trustedActionOrigins: [],
   approvalNotifications: true,
   autoResumeSession: true,
+  autoFollowActiveTab: false,
 }
 
 /**
@@ -242,6 +245,7 @@ function normalizeSettings(candidate: Settings): Settings {
     trustedActionOrigins: trusted,
     approvalNotifications: candidate.approvalNotifications !== false,
     autoResumeSession: candidate.autoResumeSession !== false,
+    autoFollowActiveTab: candidate.autoFollowActiveTab === true,
   }
 }
 
@@ -514,19 +518,53 @@ function persistTabAffinity(): void {
 }
 
 function observeActiveSummary(summary: AffinityTab): void {
-  const previousStatus = tabAffinity.snapshot().status
+  const previousState = tabAffinity.snapshot()
+  const previousActiveTabId = previousState.active?.tabId
   if (!tabAffinity.observeActive(summary)) return
-  if (previousStatus !== 'handoff' && tabAffinity.snapshot().status === 'handoff') {
-    const focused = tabAffinity.focusedSession()
-    if (focused !== null) {
-      activeFollowRefreshes.get(focused)?.abort()
-      cancelPendingApprovals(focused)
-    } else {
-      cancelPendingApprovals()
-    }
+  const state = tabAffinity.snapshot()
+  const activeTabChanged = previousActiveTabId !== summary.tabId
+  if (activeTabChanged
+    && settings.autoFollowActiveTab
+    && (state.status === 'handoff' || state.status === 'lost')) {
+    automaticallyFollowActiveTab(state)
+    return
+  }
+  if (previousState.status !== 'handoff' && state.status === 'handoff') {
+    cancelTabAffinityWork()
   }
   persistTabAffinity()
   broadcastTabAffinity()
+}
+
+/** Cancel work tied to the old controlled tab before changing its binding. */
+function cancelTabAffinityWork(): void {
+  const focused = tabAffinity.focusedSession()
+  if (focused !== null) {
+    activeFollowRefreshes.get(focused)?.abort()
+    cancelPendingApprovals(focused)
+  } else {
+    cancelPendingApprovals()
+  }
+}
+
+/** Rebind to the active tab after the user explicitly enabled auto-follow. */
+function automaticallyFollowActiveTab(state: ReturnType<typeof tabAffinity.snapshot> = tabAffinity.snapshot()): void {
+  if ((state.status !== 'handoff' && state.status !== 'lost') || state.active === null) return
+  const sessionId = tabAffinity.focusedSession() ?? undefined
+  const previousControlledTabId = state.controlled?.tabId
+  cancelTabAffinityWork()
+  if (!tabAffinity.decide('follow', state.revision, sessionId)) return
+  const controlled = tabAffinity.snapshot().controlled
+  if (previousControlledTabId !== undefined && previousControlledTabId !== controlled?.tabId) {
+    resetTabSnapshot(previousControlledTabId)
+  }
+  if (controlled === null) return
+  resetTabSnapshot(controlled.tabId)
+  persistTabAffinity()
+  broadcastTabAffinity()
+  if (sessionId !== undefined) {
+    void refreshFollowedPage(sessionId, controlled.tabId).catch(() => {})
+  }
 }
 
 function observeActiveTab(tab: chrome.tabs.Tab): void {
@@ -628,6 +666,12 @@ async function restoreTabAffinity(): Promise<void> {
 
 const affinityReady = restoreTabAffinity()
 
+// Settings and tab affinity restore independently. Reconcile a handoff once
+// both are ready so auto-follow also works after a service-worker restart.
+void Promise.all([settingsReady, affinityReady]).then(() => {
+  if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
+}).catch(() => {})
+
 /** Bind at prompt submission so a switch while the model is thinking is visible. */
 async function ensureInitialTabBinding(sessionId?: string): Promise<boolean> {
   await affinityReady
@@ -689,6 +733,7 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
           activeFollowRefreshes.get(sid)?.abort()
           cancelPendingApprovals(sid)
         }
+        if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
         persistTabAffinity()
         broadcastTabAffinity()
       }
@@ -1090,6 +1135,7 @@ chrome.runtime.onConnect.addListener((port) => {
         void settingsReady.then(async () => {
           const previousConnection = { bridgeUrl: settings.bridgeUrl, token: settings.token }
           await persistSettings(settingsMsg.settings)
+          if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
           syncSelectionWatch()
           if (panelPorts.size > 0) {
             await startBridge()
@@ -1345,13 +1391,14 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   broadcastSelections(selections.clearTab(tabId))
-  void affinityReady.then(() => {
+  void Promise.all([settingsReady, affinityReady]).then(() => {
     const affectedSessions = tabAffinity.sessionIdsForTab(tabId)
     if (!tabAffinity.removeTab(tabId)) return
     for (const sid of affectedSessions) {
       activeFollowRefreshes.get(sid)?.abort()
       cancelPendingApprovals(sid)
     }
+    if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
     persistTabAffinity()
     broadcastTabAffinity()
   })

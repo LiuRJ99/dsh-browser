@@ -149,7 +149,10 @@ export function collectInteractive(root: Document | Element): Element[] {
   for (const el of root.querySelectorAll(INTERACTIVE_SELECTOR)) {
     if (seen.has(el)) continue
     seen.add(el)
-    if (isVisible(el)) result.push(el)
+    // Upload controls are commonly visually hidden behind a styled button, but
+    // the model still needs an inventory index so CDP can target the real input.
+    const isFileInput = el instanceof HTMLInputElement && el.type.toLowerCase() === 'file'
+    if (isFileInput || isVisible(el)) result.push(el)
   }
   return result
 }

@@ -11,7 +11,7 @@
  */
 
 import { DEFAULT_SNAPSHOT_MAX_CHARS } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
-import { runAction, ActionError } from './actions.ts'
+import { clearFileUploadMarker, locateFileInput, runAction, ActionError } from './actions.ts'
 import { ElementIds } from './ids.ts'
 import { SelectionWatcher } from './selection.ts'
 import type { SnapshotBudget } from './snapshot.ts'
@@ -32,7 +32,7 @@ type ContentListener = typeof onMessage
 /** A tool-call result for the bridge. */
 export interface ToolResult {
   ok: boolean
-  result?: { text: string; pageContent?: string; navigationPending?: boolean }
+  result?: { text: string; pageContent?: string; navigationPending?: boolean; uploadToken?: string }
   error?: { code: string; message: string }
 }
 
@@ -59,6 +59,25 @@ function onMessage(message: unknown, _sender: chrome.runtime.MessageSender, send
     // The panel dropped this frame's quote; let the same passage be re-reported.
     selectionWatcher.resetDedupe()
     sendResponse({ ok: true })
+    return
+  }
+  if (msg.type === 'DSH_FILE_UPLOAD_PREPARE') {
+    const uploadMsg = message as { args?: Record<string, unknown>; nonce?: unknown }
+    try {
+      if (typeof uploadMsg.nonce !== 'string') throw new ActionError('bad-args', 'upload nonce must be a string.')
+      const result = locateFileInput(uploadMsg.args ?? {}, ids, uploadMsg.nonce)
+      sendResponse({ ok: true, result })
+    } catch (error: unknown) {
+      const code = error instanceof ActionError ? error.code : 'action-failed'
+      const messageText = error instanceof Error ? error.message : String(error)
+      sendResponse({ ok: false, error: { code, message: messageText } })
+    }
+    return
+  }
+  if (msg.type === 'DSH_FILE_UPLOAD_CLEANUP') {
+    const nonce = (message as { nonce?: unknown }).nonce
+    if (typeof nonce === 'string') clearFileUploadMarker(nonce)
+    sendResponse({ ok: true, result: { text: 'File upload marker cleared.' } })
     return
   }
   if (msg.type !== 'DSH_ACTION') return

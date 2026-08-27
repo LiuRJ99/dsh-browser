@@ -239,7 +239,9 @@ export class TabAffinityController {
     for (const [sid, sTab] of this.sessionTabs.entries()) {
       if (sTab.tabId === tabId) {
         this.sessionTabs.delete(sid)
-        if (this.focusedSessionId === sid) this.focusedSessionId = null
+        // Keep the focused session identity through the lost state. The panel
+        // may explicitly rebind it, and the optional auto-follow policy can
+        // restore the mapping when another active tab is available.
         sessionRemoved = true
       }
     }

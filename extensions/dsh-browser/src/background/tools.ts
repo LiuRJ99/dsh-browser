@@ -20,7 +20,7 @@ import {
 import { wrapUntrustedContent } from '../security/untrusted.ts'
 import { approvalPromptForCall } from './authorization.ts'
 import { waitForNextDocumentReady } from './navigation.ts'
-import { runDownloadWait, runEval, runListTabs, runNetworkCapture, runScreenshot } from './debugger-tools.ts'
+import { runDownloadWait, runEval, runListTabs, runNetworkCapture, runScreenshot, runUploadViaDebugger } from './debugger-tools.ts'
 import type { ApprovalAuthorization, ApprovalPrompt } from '../security/approval.ts'
 
 /** A tool call from the bridge. */
@@ -328,6 +328,9 @@ async function dispatchOnce(
   // approval cannot cross the final state-changing dispatch boundary.
   if (isCancelled(call, signal)) return cancelled()
   if (targetStillAllowed?.() === false) return targetChanged()
+  if (call.name === 'browser_upload_file') {
+    return runUploadViaDebugger(tabId, call.args, frame, signal)
+  }
   const hasSnapshotBaseline = snapshotDocumentsByTab.get(tabId)?.get(frameId) === frameDocumentKey(frame)
   const requestPageDelta = includeActionDelta && hasSnapshotBaseline && ACTION_DELTA_TOOLS.has(call.name)
   const navigationWait = includeActionDelta && NAVIGATION_CANDIDATE_TOOLS.has(call.name)
@@ -511,7 +514,7 @@ function validateFrameTarget(call: ToolCall, frames: TabFrame[]): ToolAnswer | u
 }
 
 function validateElementTarget(call: ToolCall, tabId: number, frames: TabFrame[]): ToolAnswer | undefined {
-  if (call.name !== 'browser_click' && call.name !== 'browser_type') return undefined
+  if (call.name !== 'browser_click' && call.name !== 'browser_type' && call.name !== 'browser_upload_file') return undefined
   const frameId = requestedFrame(call.args)
   const frame = frames.find((candidate) => candidate.frameId === frameId)
   const snapshotted = snapshotDocumentsByTab.get(tabId)?.get(frameId)
