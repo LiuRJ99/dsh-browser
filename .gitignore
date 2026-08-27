@@ -5,3 +5,6 @@ node_modules/
 !benchmark/lib/**
 **/dist/
 **/dist-firefox/
+.DS_Store
+**/.DS_Store
+

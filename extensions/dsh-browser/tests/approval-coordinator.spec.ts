@@ -75,4 +75,19 @@ describe('ApprovalCoordinator', () => {
 
     await expect(pending).resolves.toEqual({ status: 'cancelled' })
   })
+
+  it('cancels approvals only for the requested session', async () => {
+    vi.spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce('12345678-1234-4234-8234-123456789ab1')
+      .mockReturnValueOnce('12345678-1234-4234-8234-123456789ab2')
+    const { coordinator } = harness(true)
+    const sessionOne = coordinator.request(PROMPT, new AbortController().signal, 7, 'session-1')
+    const sessionTwo = coordinator.request(PROMPT, new AbortController().signal, 7, 'session-2')
+
+    coordinator.cancelAll('session-2')
+    coordinator.respond('12345678-1234-4234-8234-123456789ab1', 'allow-once')
+
+    await expect(sessionOne).resolves.toEqual({ status: 'decision', decision: 'allow-once' })
+    await expect(sessionTwo).resolves.toEqual({ status: 'cancelled' })
+  })
 })

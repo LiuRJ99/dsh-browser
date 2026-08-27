@@ -106,4 +106,41 @@ describe('panel session transitions', () => {
     expect(savedSession.disabled).toBe(false)
     expect(sessionMenu.textContent).toBe(originalSessionTitle)
   })
+
+  it('allows starting a new session while current session is working', async () => {
+    let onEventCallback: ((frame: any) => void) | undefined
+    panelApi.onEvent = vi.fn((callback) => { onEventCallback = callback; return () => {} })
+    panelApi.setActiveSession = vi.fn().mockResolvedValue(undefined)
+
+    await act(async () => { root.render(createElement(App)) })
+    await act(async () => {
+      onStatus?.('connected', null)
+      onResumeHint?.(null)
+    })
+    await vi.waitFor(() => {
+      expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current', true)
+    })
+
+    await act(async () => {
+      onEventCallback?.({
+        t: 'event',
+        frame: {
+          type: 'event',
+          payload: {
+            sessionId: 'session-current',
+            event: { type: 'turn/start', seq: 1 },
+          },
+        },
+      })
+    })
+
+    const newSessionButton = document.querySelector<HTMLButtonElement>('.new-session-trigger')!
+    expect(newSessionButton.disabled).toBe(false)
+
+    await act(async () => { newSessionButton.click() })
+    await vi.waitFor(() => {
+      expect(panelApi.setActiveSession).toHaveBeenCalledTimes(2)
+    })
+    expect(panelApi.rebindTabAffinity).not.toHaveBeenCalled()
+  })
 })

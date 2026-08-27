@@ -587,7 +587,7 @@ export function App(): React.JSX.Element {
   const nextSeq = (): number => { seqRef.current += 1; return seqRef.current }
   const question = questions[0] ?? null
   const questionSubmitting = question !== null && hasPendingQuestion(questionSubmissions, question)
-  const sessionSwitchBlocked = sessionChanging || busy || addingImages || working || stopping
+  const sessionSwitchBlocked = sessionChanging || busy || addingImages || stopping
     || questions.length > 0 || approvalQueue.length > 0
   const sessionReady = sessionAcceptsPrompts(
     state === 'connected',
@@ -1066,13 +1066,11 @@ export function App(): React.JSX.Element {
     }
   }
 
-  /** 新建会话：后台确认重绑当前标签页后，再丢弃当前会话并创建新会话。 */
+  /** 新建会话：创建后由 session.active(isNew) 将其绑定到当前标签页。 */
   async function startNewSession(): Promise<void> {
     if (sessionSwitchBlocked || sessionChangingRef.current) return
     const transition = beginSessionTransition()
     try {
-      await api.rebindTabAffinity()
-      if (sessionTransitionRef.current !== transition) return
       sessionRef.current = null
       setSessionTitle(null)
       prepareSessionSwitch(false)

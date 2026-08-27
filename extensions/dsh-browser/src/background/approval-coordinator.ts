@@ -63,8 +63,12 @@ export class ApprovalCoordinator {
     this.settle(id, { status: 'decision', decision })
   }
 
-  cancelAll(): void {
-    for (const id of [...this.pending.keys()]) this.settle(id, { status: 'cancelled' })
+  cancelAll(sessionId?: string): void {
+    for (const [id, pending] of [...this.pending.entries()]) {
+      if (sessionId === undefined || pending.request.sessionId === sessionId) {
+        this.settle(id, { status: 'cancelled' })
+      }
+    }
   }
 
   /** Re-send every live request after a panel has installed its listeners. */
