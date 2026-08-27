@@ -84,6 +84,38 @@ export interface PanelCopy {
     save: string
     cancel: string
     snapshotHint: (maxChars: number) => string
+    relaySection: string
+    relayHelp: string
+    relayName: string
+    relayNamePlaceholder: string
+    relayProtocol: string
+    relayProtocolClaude: string
+    relayProtocolOpenai: string
+    relayProtocolCodex: string
+    relayBaseUrl: string
+    relayToken: string
+    relayTokenPlaceholder: (configured: boolean) => string
+    relayModels: string
+    relayModelsHelp: string
+    relayModelsPlaceholder: string
+    relayAdd: string
+    relayRemove: string
+    relaySetDefault: string
+    relaySetDefaultHelp: string
+    relayFetchModels: string
+    relayFetching: string
+    relayFetchOk: (count: number) => string
+    relayNeedBaseUrl: string
+    relayOpenaiListingNote: string
+    relayTest: string
+    relayTesting: string
+    relayTestOk: (count: number, names: string) => string
+    relayTestFailed: (reason: string) => string
+    relayTestManualOnly: string
+    relaySavedOk: string
+    relaySaveFailed: (reason: string) => string
+    relayEmpty: string
+    relayInvalidName: string
   }
   update: {
     eyebrow: string
@@ -120,6 +152,10 @@ export interface PanelCopy {
     newSession: string
     sessionPickerLoading: string
     sessionPickerEmpty: string
+    deleteSession: string
+    deleteSessionConfirm: (title: string) => string
+    deleteSessionFailed: (reason: string) => string
+    deletePurgeFailed: (reason: string) => string
     emptyTitle: string
     emptyDescription: string
     overviewPage: string
@@ -154,6 +190,10 @@ export interface PanelCopy {
     imageModelUnsupported: string
     imageSubagentUnsupported: string
     imageSendFailed: (reason: string) => string
+    selectionChip: string
+    selectionAttached: string
+    selectionTruncated: string
+    removeSelection: string
   }
 }
 
@@ -234,7 +274,7 @@ const EN: PanelCopy = {
     title: 'Settings',
     bridgeAddress: 'Bridge address',
     bridgeHelp: 'Leave blank to detect a local service automatically',
-    bridgePlaceholder: 'Auto-detect 3080 / 3081 / 3090 / 14389',
+    bridgePlaceholder: 'Auto-detect 3080 / 3081 / 3090 / 14389 / 43189',
     tokenHelp: 'Required by Firefox and remote deployments',
     tokenPlaceholder: 'Required for Firefox / remote deployments',
     pageSharing: 'Page content sharing',
@@ -257,6 +297,38 @@ const EN: PanelCopy = {
     save: 'Save & Connect',
     cancel: 'Cancel',
     snapshotHint: (maxChars) => `Page snapshots are limited to ${maxChars} characters and longer content is truncated. Change snapshotMaxChars in the dsh plugin to adjust this limit.`,
+    relaySection: 'Models & API relay',
+    relayHelp: 'Point the assistant at your own API relay. Each profile becomes one provider route; changes take effect on the next message without a restart.',
+    relayName: 'Profile name',
+    relayNamePlaceholder: 'e.g. my-relay',
+    relayProtocol: 'API format',
+    relayProtocolClaude: 'Claude (Anthropic Messages)',
+    relayProtocolOpenai: 'OpenAI (Chat Completions)',
+    relayProtocolCodex: 'Codex (OpenAI Responses)',
+    relayBaseUrl: 'Base URL',
+    relayToken: 'Token',
+    relayTokenPlaceholder: (configured) => configured ? 'Saved — type to replace' : 'API token for the relay',
+    relayModels: 'Models',
+    relayModelsHelp: 'One model per line as `id, context window` — e.g. `claude-sonnet-4-5, 200000`. The context window is optional.',
+    relayModelsPlaceholder: 'model-id, 128000',
+    relayFetchModels: 'Fetch models',
+    relayFetching: 'Fetching models…',
+    relayFetchOk: (count) => `Filled in ${count} models from the relay.`,
+    relayNeedBaseUrl: 'Enter a base URL first.',
+    relayOpenaiListingNote: ' (listed via the relay\'s OpenAI-compatible endpoint)',
+    relayAdd: 'Add profile',
+    relayRemove: 'Remove profile',
+    relaySetDefault: 'Use as default model',
+    relaySetDefaultHelp: 'New conversations start with the first model of this profile',
+    relayTest: 'Test connection',
+    relayTesting: 'Testing…',
+    relayTestOk: (count, names) => `OK — ${count} model(s): ${names}`,
+    relayTestFailed: (reason) => `Failed: ${reason}`,
+    relayTestManualOnly: 'This protocol does not support listing models; fill them in manually.',
+    relaySavedOk: 'Relay profiles saved.',
+    relaySaveFailed: (reason) => `Saving failed: ${reason}`,
+    relayEmpty: 'No relay profiles yet.',
+    relayInvalidName: 'Enter a profile name.',
   },
   update: {
     eyebrow: 'Release channel',
@@ -293,6 +365,10 @@ const EN: PanelCopy = {
     newSession: 'New chat',
     sessionPickerLoading: 'Loading…',
     sessionPickerEmpty: 'No past sessions yet',
+    deleteSession: 'Delete session',
+    deleteSessionConfirm: (title) => `Delete “${title}”? Its conversation history will be removed permanently.`,
+    deleteSessionFailed: (reason) => `Delete failed: ${reason}`,
+    deletePurgeFailed: (reason) => `Removed from the list, but file cleanup failed (it may reappear after dsh restarts): ${reason}`,
     emptyTitle: 'Hand me the current page',
     emptyDescription: 'I can read the page, find information, and click, fill, or navigate for you.',
     overviewPage: 'Give me an overview',
@@ -327,6 +403,10 @@ const EN: PanelCopy = {
     imageModelUnsupported: 'The current model does not support images; switch to a model that does.',
     imageSubagentUnsupported: 'Subagent sessions do not support images yet.',
     imageSendFailed: (reason) => `Sending images failed (${reason}). Your draft has been restored; try again.`,
+    selectionChip: '1 selection',
+    selectionAttached: 'Selected text',
+    selectionTruncated: '(truncated)',
+    removeSelection: 'Remove the selected text',
   },
 }
 
@@ -407,7 +487,7 @@ const ZH: PanelCopy = {
     title: '设置',
     bridgeAddress: '桥地址',
     bridgeHelp: '留空时自动检测本机服务',
-    bridgePlaceholder: '自动检测 3080 / 3081 / 3090 / 14389',
+    bridgePlaceholder: '自动检测 3080 / 3081 / 3090 / 14389 / 43189',
     tokenHelp: 'Firefox 和远程部署需要填写',
     tokenPlaceholder: 'Firefox / 远程部署时填写',
     pageSharing: '页面内容共享',
@@ -430,6 +510,38 @@ const ZH: PanelCopy = {
     save: '保存并连接',
     cancel: '取消',
     snapshotHint: (maxChars) => `页面快照上限为 ${maxChars} 字符，超出内容会被截断。可在 dsh 插件中调整 snapshotMaxChars。`,
+    relaySection: '模型与中转服务',
+    relayHelp: '把助手接到你自己的 API 中转站。每个档案对应一条提供方路由，保存后下一条消息即生效，无需重启。',
+    relayName: '档案名称',
+    relayNamePlaceholder: '例如 my-relay',
+    relayProtocol: '接口格式',
+    relayProtocolClaude: 'Claude（Anthropic Messages）',
+    relayProtocolOpenai: 'OpenAI（Chat Completions）',
+    relayProtocolCodex: 'Codex（OpenAI Responses）',
+    relayBaseUrl: '中转地址 Base URL',
+    relayToken: '令牌 Token',
+    relayTokenPlaceholder: (configured) => configured ? '已保存 — 输入可替换' : '中转站的 API 令牌',
+    relayModels: '模型列表',
+    relayModelsHelp: '每行一个模型，格式 `模型ID, 上下文窗口` — 如 `claude-sonnet-4-5, 200000`。上下文窗口可省略。',
+    relayModelsPlaceholder: 'model-id, 128000',
+    relayFetchModels: '获取模型列表',
+    relayFetching: '正在获取模型列表…',
+    relayFetchOk: (count) => `已从中转站填入 ${count} 个模型。`,
+    relayNeedBaseUrl: '请先填写中转地址 Base URL。',
+    relayOpenaiListingNote: '（经中转站的 OpenAI 兼容接口列出）',
+    relayAdd: '添加档案',
+    relayRemove: '删除档案',
+    relaySetDefault: '设为默认模型',
+    relaySetDefaultHelp: '新会话将默认使用该档案的第一个模型',
+    relayTest: '测试连接',
+    relayTesting: '测试中…',
+    relayTestOk: (count, names) => `连接成功 — ${count} 个模型：${names}`,
+    relayTestFailed: (reason) => `连接失败：${reason}`,
+    relayTestManualOnly: '该协议不支持在线列出模型，请手动填写模型列表。',
+    relaySavedOk: '中转配置已保存。',
+    relaySaveFailed: (reason) => `保存失败：${reason}`,
+    relayEmpty: '还没有中转档案。',
+    relayInvalidName: '请填写档案名称。',
   },
   update: {
     eyebrow: '发布通道',
@@ -466,6 +578,10 @@ const ZH: PanelCopy = {
     newSession: '新对话',
     sessionPickerLoading: '加载中…',
     sessionPickerEmpty: '暂无历史会话',
+    deleteSession: '删除会话',
+    deleteSessionConfirm: (title) => `确定删除「${title}」吗？对话历史将被永久移除。`,
+    deleteSessionFailed: (reason) => `删除失败：${reason}`,
+    deletePurgeFailed: (reason) => `已从列表移除，但文件清理失败（dsh 重启后可能再次出现）：${reason}`,
     emptyTitle: '把当前页面交给我',
     emptyDescription: '我可以阅读页面、查找信息，也可以替你点击、填写和导航。',
     overviewPage: '先概览这个页面',
@@ -500,6 +616,10 @@ const ZH: PanelCopy = {
     imageModelUnsupported: '当前模型不支持图片，请切换到支持图片的模型。',
     imageSubagentUnsupported: '子智能体会话暂不支持图片。',
     imageSendFailed: (reason) => `图片发送失败（${reason}）。草稿已恢复，请重试。`,
+    selectionChip: '1 处选中内容',
+    selectionAttached: '选中的网页内容',
+    selectionTruncated: '（已截断）',
+    removeSelection: '移除选中内容',
   },
 }
 

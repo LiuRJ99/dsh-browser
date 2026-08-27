@@ -3,8 +3,8 @@ import type { PanelCopy } from './strings.ts'
 import {
   checkForExtensionUpdate,
   checkoutInstallCommand,
+  managedInstallCommand,
   readExtensionInstallInfo,
-  UPDATE_COMMAND,
   type ExtensionInstallInfo,
 } from './updates.ts'
 
@@ -48,7 +48,7 @@ export function UpdateCard({ copy }: { copy: PanelCopy['update'] }): React.JSX.E
 
   async function copyCommand(): Promise<void> {
     const command = installInfo?.mode === 'managed'
-      ? UPDATE_COMMAND
+      ? managedInstallCommand()
       : installInfo?.mode === 'checkout'
         ? checkoutInstallCommand(installInfo.sourceRoot)
         : null

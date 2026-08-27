@@ -29,6 +29,7 @@ describe('panel session transitions', () => {
           get: vi.fn(async () => ({ dshSettings: { autoResumeSession: false } })),
         },
       },
+      windows: { getCurrent: vi.fn(async () => ({ id: 1 })) },
     })
 
     const rpc = vi.fn(async (method: string, _payload?: unknown) => {
@@ -54,10 +55,13 @@ describe('panel session transitions', () => {
       onApprovalRequest: vi.fn(() => unsubscribe),
       onApprovalResolved: vi.fn(() => unsubscribe),
       onTabAffinity: vi.fn(() => unsubscribe),
+      onSelection: vi.fn(() => unsubscribe),
       onSessionResumeHint: vi.fn((callback) => { onResumeHint = callback; return unsubscribe }),
       respondToApproval: vi.fn(async () => {}),
       resolveTabAffinity: vi.fn(async () => {}),
       rebindTabAffinity: vi.fn(async () => {}),
+      clearSelection: vi.fn(async () => {}),
+      registerWindow: vi.fn(async () => {}),
       setActiveSession: vi.fn()
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error('runtime port unavailable')),
@@ -81,17 +85,17 @@ describe('panel session transitions', () => {
       onResumeHint?.(null)
     })
     await vi.waitFor(() => {
-      expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current')
+      expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current', true)
     })
 
     const sessionMenu = document.querySelector<HTMLButtonElement>('.session-menu-trigger')!
     const originalSessionTitle = sessionMenu.textContent
     await act(async () => { sessionMenu.click() })
     await vi.waitFor(() => {
-      expect(document.querySelectorAll('.session-list button')).toHaveLength(2)
+      expect(document.querySelectorAll('.session-list li > button:not(.session-delete)')).toHaveLength(2)
     })
 
-    const savedSession = document.querySelectorAll<HTMLButtonElement>('.session-list button')[1]
+    const savedSession = document.querySelectorAll<HTMLButtonElement>('.session-list li > button:not(.session-delete)')[1]
     await act(async () => { savedSession.click() })
     await vi.waitFor(() => {
       expect(document.querySelector('.error')?.textContent).toBe('runtime port unavailable')
@@ -101,5 +105,42 @@ describe('panel session transitions', () => {
     expect(document.querySelector<HTMLButtonElement>('.new-session-trigger')?.disabled).toBe(false)
     expect(savedSession.disabled).toBe(false)
     expect(sessionMenu.textContent).toBe(originalSessionTitle)
+  })
+
+  it('allows starting a new session while current session is working', async () => {
+    let onEventCallback: ((frame: any) => void) | undefined
+    panelApi.onEvent = vi.fn((callback) => { onEventCallback = callback; return () => {} })
+    panelApi.setActiveSession = vi.fn().mockResolvedValue(undefined)
+
+    await act(async () => { root.render(createElement(App)) })
+    await act(async () => {
+      onStatus?.('connected', null)
+      onResumeHint?.(null)
+    })
+    await vi.waitFor(() => {
+      expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current', true)
+    })
+
+    await act(async () => {
+      onEventCallback?.({
+        t: 'event',
+        frame: {
+          type: 'event',
+          payload: {
+            sessionId: 'session-current',
+            event: { type: 'turn/start', seq: 1 },
+          },
+        },
+      })
+    })
+
+    const newSessionButton = document.querySelector<HTMLButtonElement>('.new-session-trigger')!
+    expect(newSessionButton.disabled).toBe(false)
+
+    await act(async () => { newSessionButton.click() })
+    await vi.waitFor(() => {
+      expect(panelApi.setActiveSession).toHaveBeenCalledTimes(2)
+    })
+    expect(panelApi.rebindTabAffinity).not.toHaveBeenCalled()
   })
 })

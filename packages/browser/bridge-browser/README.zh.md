@@ -29,6 +29,13 @@ curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main
 cd ~/.dsh/dsh-browser && pnpm start
 ```
 
+Windows 请改用 PowerShell 安装器：
+
+```powershell
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+cd $HOME\.dsh\dsh-browser; pnpm start
+```
+
 开发者也可以 clone 仓库，在 checkout 中依次运行 `./scripts/install.sh` 和 `pnpm start`。本地模式直接使用当前分支，不会下载或覆盖源码。两种安装模式都会注册同一个 profile bundle；构建工具只从选定的 workspace 解析，绝不读取父 checkout 或父目录的 `node_modules`。
 
 npm 上最新的公开运行时也会加载已注册的 bundle：

@@ -11,6 +11,7 @@ import type { BridgeState } from '../background/bridge.ts'
 import type { Settings } from '../background/index.ts'
 import type { TabAffinityDecision, TabAffinityState } from '../background/tab-affinity.ts'
 import type { ApprovalDecision, ApprovalRequest } from '../security/approval.ts'
+import { parsePageSelection, type PageSelection } from '../selection.ts'
 import { getUiLocale } from '../i18n.ts'
 
 /** Panel-side subset of the extension settings. */
@@ -71,12 +72,17 @@ interface TabAffinityRebindResultMessage {
   error?: { code: string; message: string }
 }
 
+interface SelectionMessage {
+  type: 'selection'
+  selection: unknown
+}
+
 interface SessionResumeHintMessage {
   type: 'session.resume-hint'
   sessionId: string | null
 }
 
-type BackgroundMessage = RpcResultMessage | RespondResultMessage | StatusMessage | EventMessage | ApprovalRequestMessage | ApprovalResolvedMessage | TabAffinityMessage | TabAffinityRebindResultMessage | SessionResumeHintMessage
+type BackgroundMessage = RpcResultMessage | RespondResultMessage | StatusMessage | EventMessage | ApprovalRequestMessage | ApprovalResolvedMessage | TabAffinityMessage | TabAffinityRebindResultMessage | SelectionMessage | SessionResumeHintMessage
 
 /** Structured gateway failure retained for product-level error handling. */
 export class PanelRpcError extends Error {
@@ -107,11 +113,16 @@ export interface PanelApi {
   onApprovalRequest(callback: (request: ApprovalRequest) => void): () => void
   onApprovalResolved(callback: (id: string) => void): () => void
   onTabAffinity(callback: (state: TabAffinityState) => void): () => void
+  onSelection(callback: (selection: PageSelection | null) => void): () => void
   onSessionResumeHint(callback: (sessionId: string | null) => void): () => void
   respondToApproval(id: string, decision: ApprovalDecision): Promise<void>
   resolveTabAffinity(revision: number, decision: TabAffinityDecision, sessionId: string | null): Promise<void>
   rebindTabAffinity(): Promise<void>
-  setActiveSession(sessionId: string): Promise<void>
+  /** Clear all selection state, or only the exact selection supplied. */
+  clearSelection(selection?: PageSelection): Promise<void>
+  /** Scope this panel's selections to its own browser window. */
+  registerWindow(windowId: number): Promise<void>
+  setActiveSession(sessionId: string, isNew?: boolean): Promise<void>
   updateSettings(settings: Partial<PanelSettings>): Promise<void>
   requestStatus(): Promise<void>
 }
@@ -133,6 +144,7 @@ export function connectPanel(): PanelApi {
   const approvalListeners = new Set<(request: ApprovalRequest) => void>()
   const approvalResolvedListeners = new Set<(id: string) => void>()
   const tabAffinityListeners = new Set<(state: TabAffinityState) => void>()
+  const selectionListeners = new Set<(selection: PageSelection | null) => void>()
   const sessionResumeHintListeners = new Set<(sessionId: string | null) => void>()
 
   let port: chrome.runtime.Port | null = null
@@ -183,6 +195,12 @@ export function connectPanel(): PanelApi {
       case 'tab-affinity':
         for (const listener of tabAffinityListeners) listener(msg.state)
         break
+      case 'selection': {
+        // The page owns this text; validate it again on the way into the UI.
+        const selection = parsePageSelection(msg.selection)
+        for (const listener of selectionListeners) listener(selection)
+        break
+      }
       case 'tab-affinity.rebind.result': {
         const entry = pendingRebinds.get(msg.id)
         if (entry === undefined) return
@@ -354,6 +372,10 @@ export function connectPanel(): PanelApi {
       tabAffinityListeners.add(callback)
       return () => { tabAffinityListeners.delete(callback) }
     },
+    onSelection(callback) {
+      selectionListeners.add(callback)
+      return () => { selectionListeners.delete(callback) }
+    },
     onSessionResumeHint(callback) {
       sessionResumeHintListeners.add(callback)
       return () => { sessionResumeHintListeners.delete(callback) }
@@ -379,8 +401,14 @@ export function connectPanel(): PanelApi {
         })
       })
     },
-    setActiveSession(sessionId) {
-      return send({ type: 'session.active', sessionId })
+    clearSelection(selection) {
+      return send({ type: 'selection.clear', ...(selection === undefined ? {} : { selection }) })
+    },
+    registerWindow(windowId) {
+      return send({ type: 'panel.window', windowId })
+    },
+    setActiveSession(sessionId, isNew) {
+      return send({ type: 'session.active', sessionId, isNew })
     },
     updateSettings(next) {
       return send({ type: 'settings', settings: next })

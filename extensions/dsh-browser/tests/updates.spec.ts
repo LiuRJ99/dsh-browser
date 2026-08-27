@@ -5,9 +5,12 @@ import {
   checkForExtensionUpdate,
   checkoutInstallCommand,
   compareExtensionVersions,
+  managedInstallCommand,
   parseExtensionInstallInfo,
   readExtensionInstallInfo,
+  UPDATE_COMMAND,
   UPDATE_MANIFEST_URL,
+  WINDOWS_UPDATE_COMMAND,
 } from '../src/panel/updates.ts'
 
 describe('extension update checks', () => {
@@ -65,6 +68,23 @@ describe('extension update checks', () => {
     expect(parseExtensionInstallInfo({ mode: 'managed' })).toEqual({ mode: 'unknown' })
   })
 
+  it('accepts the absolute roots install.ps1 records on Windows', () => {
+    expect(parseExtensionInstallInfo({
+      schemaVersion: 1,
+      mode: 'checkout',
+      sourceRoot: 'C:\\Users\\example\\dsh-browser',
+    })).toEqual({ mode: 'checkout', sourceRoot: 'C:\\Users\\example\\dsh-browser' })
+    expect(parseExtensionInstallInfo({
+      schemaVersion: 1,
+      mode: 'checkout',
+      sourceRoot: '\\\\build\\share\\dsh-browser',
+    })).toEqual({ mode: 'checkout', sourceRoot: '\\\\build\\share\\dsh-browser' })
+    expect(parseExtensionInstallInfo({ schemaVersion: 1, mode: 'checkout', sourceRoot: 'C:relative' }))
+      .toEqual({ mode: 'unknown' })
+    expect(parseExtensionInstallInfo({ schemaVersion: 1, mode: 'checkout', sourceRoot: 'dsh-browser' }))
+      .toEqual({ mode: 'unknown' })
+  })
+
   it('treats missing or malformed install metadata as unknown', async () => {
     const missing = vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 404 }))
     await expect(readExtensionInstallInfo('chrome-extension://id/install-info.json', missing))
@@ -82,6 +102,21 @@ describe('extension update checks', () => {
       .toBe("cd '/Users/example/dev'\"'\"'s checkout' && ./scripts/install.sh")
   })
 
+  it('builds a PowerShell command for a Windows checkout', () => {
+    expect(checkoutInstallCommand('C:\\Users\\example\\My Checkout'))
+      .toBe("cd 'C:\\Users\\example\\My Checkout'; .\\scripts\\install.ps1")
+    expect(checkoutInstallCommand("C:\\Users\\example\\dev's checkout"))
+      .toBe("cd 'C:\\Users\\example\\dev''s checkout'; .\\scripts\\install.ps1")
+    expect(checkoutInstallCommand('\\\\build\\share\\dsh-browser'))
+      .toBe("cd '\\\\build\\share\\dsh-browser'; .\\scripts\\install.ps1")
+  })
+
+  it('picks the managed installer that matches the running platform', () => {
+    expect(managedInstallCommand('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe(UPDATE_COMMAND)
+    expect(managedInstallCommand('Mozilla/5.0 (X11; Linux x86_64)')).toBe(UPDATE_COMMAND)
+    expect(managedInstallCommand('Mozilla/5.0 (Windows NT 10.0; Win64; x64)')).toBe(WINDOWS_UPDATE_COMMAND)
+  })
+
   it('keeps package, Chrome manifest, and update CSP metadata aligned', () => {
     const extensionRoot = process.cwd()
     const packageManifest = JSON.parse(readFileSync(`${extensionRoot}/package.json`, 'utf8')) as { version: string }
@@ -96,5 +131,20 @@ describe('extension update checks', () => {
     expect(installer).toContain('INSTALL_MODE="managed"')
     expect(installer).toContain('INSTALL_MODE="checkout"')
     expect(installer).toContain('$DIST_DIR/install-info.json')
+  })
+
+  it('keeps the Windows installer writing the same install provenance', () => {
+    const extensionRoot = process.cwd()
+    const installerPath = `${extensionRoot}/../../scripts/install.ps1`
+    const installer = readFileSync(installerPath, 'utf8')
+
+    // Windows PowerShell decodes a BOM-less script with the machine's ANSI codepage, which
+    // turns every Chinese message into mojibake. Losing the BOM is silent, so pin it here.
+    expect(readFileSync(installerPath).subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+    expect(installer).toContain("$InstallMode = if (Test-Path")
+    expect(installer).toContain("{ 'managed' } else { 'checkout' }")
+    expect(installer).toContain("Join-Path $DistDir 'install-info.json'")
+    expect(installer).toContain('schemaVersion = 1')
+    expect(WINDOWS_UPDATE_COMMAND).toContain('scripts/install.ps1')
   })
 })

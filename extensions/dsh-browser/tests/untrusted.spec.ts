@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { wrapUntrustedContent } from '../src/background/untrusted.ts'
+import { wrapUntrustedContent } from '../src/security/untrusted.ts'
 
 describe('wrapUntrustedContent', () => {
   it('uses a nonce-bound trust boundary around page-authored text', () => {

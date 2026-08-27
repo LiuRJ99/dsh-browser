@@ -26,6 +26,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import type { MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import {
   BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD,
+  BRIDGE_SESSION_PURGE_METHOD,
   HELLO_TIMEOUT_MS,
   PING_INTERVAL_MS,
   parseBridgeFrame,
@@ -34,6 +35,7 @@ import {
   type ClientFrame,
   type ToolErrorCode,
 } from './protocol.ts'
+import { SessionPurgeError } from './session-purge.ts'
 import { verifyToken } from './token.ts'
 
 /**
@@ -92,6 +94,11 @@ export interface BridgeServerDeps {
   caps: BridgeCaps
   /** Seed a followed-page snapshot into a live or deferred Agent session. */
   injectBrowserSnapshot: (sessionId: string, snapshot: string) => void | Promise<void>
+  /**
+   * Permanently delete one session's durable storage. Callers archive the
+   * session through the gateway first; this only removes files.
+   */
+  purgeSession: (sessionId: string) => Promise<void>
   /**
    * Test seam: force the remote address seen by the privilege gate. The
    * sandbox cannot bind arbitrary loopback literals, so the non-loopback
@@ -432,6 +439,27 @@ export class BridgeServer {
       }
       return
     }
+    if (frame.method === BRIDGE_SESSION_PURGE_METHOD) {
+      const sessionId = purgeSessionPayload(frame.payload)
+      if (sessionId === undefined) {
+        sendFrame(conn.ws, {
+          t: 'rpc.result',
+          id: frame.id,
+          ok: false,
+          error: { code: 'bad-request', message: 'sessionId must be a non-empty string' },
+        })
+        return
+      }
+      try {
+        await this.deps.purgeSession(sessionId)
+        sendFrame(conn.ws, { t: 'rpc.result', id: frame.id, ok: true, result: { purged: true } })
+      } catch (error: unknown) {
+        const code = error instanceof SessionPurgeError ? error.code : 'internal'
+        const message = error instanceof Error ? error.message : String(error)
+        sendFrame(conn.ws, { t: 'rpc.result', id: frame.id, ok: false, error: { code, message } })
+      }
+      return
+    }
     const body = JSON.stringify({ type: 'client-request', rpcId: frame.id, method: frame.method, payload: frame.payload })
     const request = new Request(new URL(`/api/${frame.method}`, 'http://dsh.internal'), {
       method: 'POST',
@@ -519,6 +547,13 @@ function browserSnapshotPayload(payload: unknown): { sessionId: string; snapshot
   if (typeof sessionId !== 'string' || sessionId.trim() === '') return undefined
   if (typeof snapshot !== 'string' || snapshot.trim() === '') return undefined
   return { sessionId, snapshot }
+}
+
+function purgeSessionPayload(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  const { sessionId } = payload as Record<string, unknown>
+  if (typeof sessionId !== 'string' || sessionId.trim() === '') return undefined
+  return sessionId
 }
 
 function orderedSessionId(frame: Extract<ClientFrame, { t: 'rpc' }>): string | undefined {

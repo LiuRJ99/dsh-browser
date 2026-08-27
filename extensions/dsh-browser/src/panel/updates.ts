@@ -12,6 +12,15 @@ export const UPDATE_MANIFEST_URL =
 export const UPDATE_COMMAND =
   'curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash'
 
+/**
+ * install.ps1 carries a UTF-8 BOM so Windows PowerShell renders its Chinese half, and a
+ * leading BOM is exactly what Invoke-Expression refuses, so the file is downloaded and run.
+ */
+export const WINDOWS_UPDATE_COMMAND =
+  '$s="$env:TEMP\\dsh-install.ps1"; '
+  + 'irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; '
+  + 'powershell -NoProfile -ExecutionPolicy Bypass -File $s'
+
 export interface ExtensionUpdateResult {
   currentVersion: string
   latestVersion: string
@@ -23,6 +32,16 @@ export type ExtensionInstallInfo =
   | { mode: 'checkout'; sourceRoot: string }
   | { mode: 'unknown' }
 
+/** A drive-letter root (C:\dsh-browser) or a UNC share (\\host\share\dsh-browser). */
+function isWindowsPath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+}
+
+/** Installers only ever record an absolute root, so a relative one is corrupt metadata. */
+function isAbsolutePath(value: string): boolean {
+  return value.startsWith('/') || isWindowsPath(value)
+}
+
 /** Parse installer-written provenance without trusting malformed local data. */
 export function parseExtensionInstallInfo(value: unknown): ExtensionInstallInfo {
   if (typeof value !== 'object' || value === null) return { mode: 'unknown' }
@@ -31,7 +50,7 @@ export function parseExtensionInstallInfo(value: unknown): ExtensionInstallInfo 
   if (info.mode === 'managed') return { mode: 'managed' }
   if (info.mode === 'checkout'
     && typeof info.sourceRoot === 'string'
-    && info.sourceRoot.startsWith('/')
+    && isAbsolutePath(info.sourceRoot)
     && !info.sourceRoot.includes('\0')) {
     return { mode: 'checkout', sourceRoot: info.sourceRoot }
   }
@@ -56,9 +75,27 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`
 }
 
-/** Re-run the installer from the exact checkout that produced this extension. */
+function powerShellQuote(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+/**
+ * Re-run the installer from the exact checkout that produced this extension. The recorded
+ * root already says which platform wrote it, so the command matches that shell.
+ */
 export function checkoutInstallCommand(sourceRoot: string): string {
+  if (isWindowsPath(sourceRoot)) {
+    return `cd ${powerShellQuote(sourceRoot)}; .\\scripts\\install.ps1`
+  }
   return `cd ${shellQuote(sourceRoot)} && ./scripts/install.sh`
+}
+
+/**
+ * A managed install records no path, so the panel picks the installer by the platform it is
+ * running on — which is the machine the extension was installed to.
+ */
+export function managedInstallCommand(userAgent: string = navigator.userAgent): string {
+  return /windows/i.test(userAgent) ? WINDOWS_UPDATE_COMMAND : UPDATE_COMMAND
 }
 
 function versionParts(version: string): number[] {

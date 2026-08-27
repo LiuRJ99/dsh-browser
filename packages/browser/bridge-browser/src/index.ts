@@ -39,6 +39,7 @@ import {
 } from './protocol.ts'
 import { withSessionDeferral } from './session-deferral.ts'
 import { withSessionWorkspace } from './session-workspace.ts'
+import { purgeSessionFiles, type SessionPurgeDeps } from './session-purge.ts'
 import { resolveToken } from './token.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
@@ -55,6 +56,9 @@ const DEFAULT_MAX_INTERACTIVE_ITEMS = 60
 
 /** Default directory backing the browser extension's session group. */
 const DEFAULT_SESSION_WORKSPACE_PATH = dshHomePath('browser-sessions')
+
+/** Durable session storage root written by the JSONL persistence plugin. */
+const SESSIONS_ROOT = dshHomePath('sessions')
 
 /** Default: sessions materialize only on the first message (open-and-close leaves no trace). */
 const DEFAULT_DEFER_SESSION_CREATE = true
@@ -181,6 +185,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   )
   const browserContext = new BrowserContextInjector(ctx.agents)
   ctx.on('agent/session-start', ({ agent }) => { browserContext.activate(agent) })
+
+  const purgeSession = async (sessionId: string): Promise<void> => {
+    const runningSessionIds = new Set<string>()
+    try {
+      const listed = await api.sessions.list({ rpcId: RpcId(randomUUID()), payload: {} })
+      if (listed.result.ok) {
+        for (const entry of listed.result.value.items) {
+          if (entry.running) runningSessionIds.add(entry.sessionId)
+        }
+      }
+    } catch {
+      // Guard is best-effort: an unavailable listing must not block deletion,
+      // because the panel already refuses running rows and archives first.
+    }
+    const deps: SessionPurgeDeps = { sessionsRoot: SESSIONS_ROOT, runningSessionIds }
+    await purgeSessionFiles(deps, sessionId)
+  }
+
   const server = new BridgeServer({
     token: tokenRes.token,
     apiHandler: toFetchHandler(api),
@@ -192,6 +214,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       maxInteractiveItems: resolved.maxInteractiveItems,
     },
     injectBrowserSnapshot: (sessionId, snapshot) => { browserContext.inject(sessionId, snapshot) },
+    purgeSession,
   })
 
   const route: WebUpgradeRoute = {

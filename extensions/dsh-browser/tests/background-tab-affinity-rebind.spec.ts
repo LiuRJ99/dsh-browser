@@ -56,8 +56,10 @@ function mockChrome() {
       onClicked: chromeEvent<[string]>(),
     },
     runtime: {
+      id: 'test-extension',
       getURL: (path: string) => `chrome-extension://test/${path}`,
       onConnect,
+      onMessage: chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>(),
     },
     sidePanel: {
       open: vi.fn(async () => {}),
@@ -83,9 +85,13 @@ function mockChrome() {
       onReplaced: chromeEvent<[number, number]>(),
       onRemoved: chromeEvent<[number]>(),
     },
+    webNavigation: {
+      onCommitted: chromeEvent<[{ tabId: number; frameId: number }]>(),
+    },
     windows: {
       WINDOW_ID_NONE: -1,
       onFocusChanged: chromeEvent<[number]>(),
+      onRemoved: chromeEvent<[number]>(),
     },
   } as unknown as typeof chrome)
   return { onConnect, query }
