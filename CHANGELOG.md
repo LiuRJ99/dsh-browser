@@ -3,6 +3,27 @@
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.4] - 2026-08-28
+
+### Added
+
+- **自动跟随当前标签页（autoFollowActiveTab）**：新增面板设置项，开启后切换标签页不再询问交接，浏览器操作自动跟随活动标签页；受控标签页关闭后，只要有活动标签页也会自动恢复绑定（`src/background/index.ts` 的 `automaticallyFollowActiveTab`、`src/background/tab-affinity.ts`、`src/panel/App.tsx`、`src/panel/strings.ts` 中英文文案）；配套测试 `tests/background-tab-affinity-auto-follow.spec.ts`、`tests/tab-affinity.spec.ts`。
+- **DHS Desktop 固定端口自动发现**：桥地址自动探测列表新增 DSH Desktop 固定端口 `43189`（`8ae8b56 feat(extension): auto-discover DSH Desktop's fixed port 43189`，`src/panel/strings.ts` 中英文占位文案同步）。
+- **`browser` 授权 skill**：bridge 插件在技能注册表存在时注册用户专属的 `browser` 授权 skill（`modelInvocable: false`，仅用户 `/browser` 手势可唤起，与 `dsh-tool-lazy-gate` 解锁信号配合），见 `packages/browser/bridge-browser/src/index.ts`。
+- **工作期间可新建/切换会话**：面板在代理工作（working）状态下允许新建会话与切换会话，不再强制等待（`336a681 feat(panel): allow starting new session and switching sessions while agent is working`）；配套 `tests/panel-session-transition.spec.ts`。
+
+### Changed
+
+- **每会话标签页亲和（per-session tab affinity）**：后台为并发会话分别维护受控标签页映射并持久化，Worker 重启后恢复；审批取消仅作用于聚焦会话（`8a1604d`、`1570f47`、`0506e78`），`src/background/tab-affinity.ts`、`src/background/index.ts` 重构，配套 `tests/tab-affinity.spec.ts`、`tests/approval-coordinator.spec.ts`。
+- **工具目标解析语义**：`resolveTarget` 对缺失会话的返回由 `lost` 调整为 `initial`，允许在解析阶段重新绑定（`src/background/tab-affinity.ts`）；工具调用前在 `autoFollowActiveTab` 开启时主动同步活动标签页（未提交工作区改动）。
+- **面板设置项防挤压**：设置卡片不再被压缩（`c2c098e fix(panel): prevent settings cards from shrinking`、`86fb18d test(panel): guard settings section sizing`），`src/panel/styles.css` 与 `tests/panel-styles.spec.ts`。
+- **授权契约加固**：桥接 `authorization.ts` 明确 moz-extension:// 起源不构成身份边界，非回环远端一律要求 bearer token（`src/background/authorization.ts`），配套 `tests/authorization.spec.ts`。
+- **上传与工具通道**：`feat(browser): improve uploads and tab affinity` 合并后，桥接 `tools.ts` 新增上传/等待/表格/求值等 RPC 通道（`packages/browser/bridge-browser/src/tools.ts`），配套 `tests/tools.spec.ts`。
+
+### Docs
+
+- README（中英）同步自动跟随、端口自动发现与每会话亲和说明。
+
 ## [0.1.3] - 2026-08-23
 
 ### Added

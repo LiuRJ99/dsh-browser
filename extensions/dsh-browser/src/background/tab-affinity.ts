@@ -319,7 +319,7 @@ export class TabAffinityController {
   resolveTarget(sessionId?: string): TabTargetResolution {
     if (sessionId !== undefined) {
       const tab = this.sessionTabs.get(sessionId)
-      return tab === undefined ? { kind: 'lost' } : { kind: 'target', tab: { ...tab } }
+      return tab === undefined ? { kind: 'initial' } : { kind: 'target', tab: { ...tab } }
     }
     switch (this.status()) {
       case 'unbound': return { kind: 'initial' }

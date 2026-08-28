@@ -181,7 +181,7 @@ describe('TabAffinityController', () => {
     restoredAffinity.restoreSessionTabs(sessionMap)
     expect(restoredAffinity.resolveTarget('session-1')).toEqual({ kind: 'target', tab: tab(1) })
     expect(restoredAffinity.resolveTarget('session-2')).toEqual({ kind: 'target', tab: tab(2) })
-    expect(restoredAffinity.resolveTarget('session-missing')).toEqual({ kind: 'lost' })
+    expect(restoredAffinity.resolveTarget('session-missing')).toEqual({ kind: 'initial' })
     expect(restoredAffinity.allowsTarget(2, 'session-missing')).toBe(false)
   })
 })

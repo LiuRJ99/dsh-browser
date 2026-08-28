@@ -709,6 +709,22 @@ function affinityFailure(kind: 'handoff' | 'lost' | 'missing'): ToolAnswer {
 /** Resolve one stable tab target without allowing a manual switch to drift it. */
 async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'windowId'> | ToolAnswer> {
   await affinityReady
+  if (settings.autoFollowActiveTab) {
+    try {
+      const activeTab = await syncActiveTab()
+      if (activeTab !== undefined) {
+        const summary = summarizeTab(activeTab)
+        if (summary !== null) {
+          const currentTab = sessionId !== undefined ? tabAffinity.getSessionTab(sessionId) : tabAffinity.snapshot().controlled
+          if (currentTab === null || currentTab === undefined || currentTab.tabId !== activeTab.id) {
+            tabAffinity.rebindActive(summary, sessionId)
+            persistTabAffinity()
+            broadcastTabAffinity()
+          }
+        }
+      }
+    } catch {}
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const resolution = tabAffinity.resolveTarget(sessionId)
     if (resolution.kind === 'handoff') return affinityFailure('handoff')
