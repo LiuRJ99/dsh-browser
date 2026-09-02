@@ -513,10 +513,15 @@ async function clickTextAction(args: Record<string, unknown>, ctx: ActionContext
 function findClickable(text: string | undefined, selector: string | undefined): Element | null {
   if (selector !== undefined) {
     const candidates = [...document.querySelectorAll(selector)]
-    // Prefer a genuinely actionable element; fall back to any visible match.
-    const actionable = candidates.find((el) => el instanceof HTMLElement && isActionable(el) && isLikelyClickable(el))
+    const matching = text === undefined
+      ? candidates
+      : candidates.filter((el) => visibleText(el).includes(text))
+    // When selector and text are both supplied, text is a required filter.
+    // Otherwise a selector such as button[role="radio"] can click the first
+    // radio regardless of the requested label.
+    const actionable = matching.find((el) => el instanceof HTMLElement && isActionable(el) && isLikelyClickable(el))
     if (actionable !== undefined) return actionable
-    const visible = candidates.find((el) => el instanceof HTMLElement && isActionable(el))
+    const visible = matching.find((el) => el instanceof HTMLElement && isActionable(el))
     if (visible !== undefined) return visible
     if (text !== undefined) {
       const byText = candidates.find((el) => visibleText(el).includes(text))

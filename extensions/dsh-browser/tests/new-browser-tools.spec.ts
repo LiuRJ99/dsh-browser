@@ -29,6 +29,25 @@ describe('browser_click_text', () => {
     expect(click).toHaveBeenCalledOnce()
   })
 
+  it('requires the requested visible text when selector and text are both provided', async () => {
+    const delivery = document.createElement('button')
+    delivery.setAttribute('role', 'radio')
+    delivery.textContent = '为我送货'
+    delivery.scrollIntoView = vi.fn()
+    const deliveryClick = vi.spyOn(delivery, 'click').mockImplementation(() => {})
+    const pickup = document.createElement('button')
+    pickup.setAttribute('role', 'radio')
+    pickup.textContent = '我要取货'
+    pickup.scrollIntoView = vi.fn()
+    const pickupClick = vi.spyOn(pickup, 'click').mockImplementation(() => {})
+    document.body.append(delivery, pickup)
+
+    await runAction('browser_click_text', { selector: 'button[role="radio"]', text: '我要取货' }, ctx())
+
+    expect(deliveryClick).not.toHaveBeenCalled()
+    expect(pickupClick).toHaveBeenCalledOnce()
+  })
+
   it('clicks an element by CSS selector when no text is provided', async () => {
     const button = document.createElement('button')
     button.className = 'export-btn'
