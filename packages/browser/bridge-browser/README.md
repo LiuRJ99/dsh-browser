@@ -45,6 +45,21 @@ npx @deepseek-ai/dsh web
 
 The installer copies the unpacked extension to `~/.dsh/browser-extension` and opens `chrome://extensions`. Load that stable directory in Chrome and use the side panel. Loopback connections are discovered automatically and require no token entry; non-loopback deployments still require the configured bearer token.
 
+### Local automation control
+
+A trusted local process can ask the already-connected extension to execute a supported browser tool through `POST /ext/browser-control`. The route is loopback-only and requires the same bearer token stored at `~/.dsh/ext-bridge-token`; it forwards to `BridgeServer.requestTool()` and does not open a second WebSocket connection. This preserves the extension's controlled-tab, approval, privacy, and content-script behavior.
+
+Example request (the token should be read at runtime and never logged):
+
+```sh
+curl -sS -X POST http://127.0.0.1:3080/ext/browser-control \
+  -H "Authorization: Bearer $(cat ~/.dsh/ext-bridge-token)" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"browser_snapshot","args":{}}'
+```
+
+The route intentionally excludes binary/local-file tools (`browser_upload_file`, `browser_screenshot`, `browser_download_wait`, and `browser_network_capture`). State-changing calls still pass through the extension's approval policy. Keep the DSH side panel/extension bridge connected before using the route.
+
 ## Security model
 
 - The bridge route lives **outside** the `/api` trust fence (which only guards client-connection's routes), so it carries its own bearer-token authentication: the first frame must be `hello` with the token within 5s, verified in constant time. Failed auth closes the socket.

@@ -29,6 +29,7 @@ import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { BridgeServer } from './server.ts'
+import { serveBrowserControl, BRIDGE_CONTROL_PATH } from './control.ts'
 import { BrowserContextInjector } from './browser-context.ts'
 import { registerBrowserTools } from './tools.ts'
 import {
@@ -238,6 +239,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     },
   }
   ctx.effect(() => ctx.webServer.register(configRoute), 'bridge-browser: /ext/bridge-config route')
+
+  // Local Node automation reuses the existing extension bridge connection;
+  // it never opens a second WebSocket client that could evict the extension.
+  const controlRoute: WebRoute = {
+    kind: 'exact',
+    path: BRIDGE_CONTROL_PATH,
+    handler: (req, res) => serveBrowserControl(req, res, {
+      token: tokenRes.token,
+      bridge: server,
+      defaultTimeoutMs: resolved.toolTimeoutMs,
+    }),
+  }
+  ctx.effect(() => ctx.webServer.register(controlRoute), 'bridge-browser: /ext/browser-control route')
 
   ctx.effect(() => {
     const disposers = registerBrowserTools(ctx, server, {

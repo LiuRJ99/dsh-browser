@@ -46,6 +46,21 @@ npx @deepseek-ai/dsh web
 
 安装器会把已解压扩展复制到 `~/.dsh/browser-extension` 并打开 `chrome://extensions`。在 Chrome 中加载这个稳定目录，然后使用侧边栏。扩展会自动发现回环连接，无需输入 token；非回环部署仍需要配置的 bearer token。
 
+### 本地自动化控制
+
+可信的本地进程可以通过 `POST /ext/browser-control` 请求已经连接的扩展执行受支持的浏览器工具。该接口只允许回环请求，并要求使用与扩展相同的 `~/.dsh/ext-bridge-token`；它会转发到 `BridgeServer.requestTool()`，不会创建第二个 WebSocket 连接，因此仍然保留扩展的受控标签页、审批、隐私和 content script 行为。
+
+示例（token 只能在运行时读取，不要写入日志）：
+
+```sh
+curl -sS -X POST http://127.0.0.1:3080/ext/browser-control \\
+  -H "Authorization: Bearer $(cat ~/.dsh/ext-bridge-token)" \\
+  -H 'Content-Type: application/json' \\
+  -d '{"name":"browser_snapshot","args":{}}'
+```
+
+该接口有意不开放二进制/本地文件工具（`browser_upload_file`、`browser_screenshot`、`browser_download_wait` 和 `browser_network_capture`）。有状态的调用仍然经过扩展审批策略。使用前请保持 DSH 侧栏/扩展 bridge 已连接。
+
 ## 安全模型
 
 - 桥路径在 `/api` 信任栅栏**之外**（栅栏只罩 client-connection 注册的路由），因此自带 bearer token 认证：首帧必须是 `hello`（5 秒内），常量时间比对，失败即断开。
