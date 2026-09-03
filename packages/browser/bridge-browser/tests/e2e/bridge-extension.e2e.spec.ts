@@ -2,7 +2,7 @@
  * End-to-end: the real Chrome extension connects to a REAL dsh composition.
  *
  * Boots the bridge composition through the vendored Loader (webserver +
- * minimal spine + api host + workspace/storage plugins + bridge plugin, same
+ * minimal spine + rc.1 Gateway host + workspace/storage plugins + bridge plugin, same
  * shape as composition.spec), launches a real Chromium with the built
  * extension (`--load-extension`), pins the bridge through the panel's real
  * settings UI (URL + token, so the extension targets THIS composition instead
@@ -32,14 +32,13 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import LlmService, { type UserMessage } from '@deepseek-ai/dsh-llm'
-import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
-import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import Storage from '@deepseek-ai/dsh-storage'
 import * as StorageJson from '@deepseek-ai/dsh-storage-json'
 import * as StorageDomain from '@deepseek-ai/dsh-storage-domain'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import * as BridgeBrowser from '../../src/index.ts'
+import { TargetGatewayHost } from '../target-gateway-host.ts'
 
 const BRIDGE = '@yuxianglin/dsh-bridge-browser'
 const TOKEN = 'e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0'
@@ -49,21 +48,6 @@ const SessionPersistenceStub = {
   name: 'session-persistence-stub',
   apply(ctx: Context): void {
     ctx.provide('sessionPersistence', { list: () => Promise.resolve([]) } as never)
-  },
-}
-
-/** The gateway over the minimal spine, provided as ctx.apiProxy (model routing stubbed). */
-const ApiHost = {
-  name: 'api-host',
-  // Mirrors ApiProxyService.inject for the services this composition provides;
-  // 'workspaceRegistry' is REQUIRED — the gateway's workspace domain calls
-  // the service property, which Cordis gates on the inject list.
-  inject: ['sessions', 'userQuestions', 'agents', 'workspaceRegistry'],
-  apply(ctx: Context, config: { cwd: string }): void {
-    ctx.provide('apiProxy', createApiProxy(ctx, {
-      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
-      cwd: config.cwd,
-    }))
   },
 }
 
@@ -81,7 +65,6 @@ async function bootComposition(): Promise<{ ctx: Context; port: number; root: st
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
     "- name: '@deepseek-ai/dsh-llm'",
-    "- name: '@deepseek-ai/dsh-agent-loop'",
     "- name: '@deepseek-ai/dsh-storage'",
     "- name: '@deepseek-ai/dsh-storage-json'",
     '  config:',
@@ -91,9 +74,10 @@ async function bootComposition(): Promise<{ ctx: Context; port: number; root: st
     "    backend: 'json'",
     "- name: 'test:session-persistence'",
     "- name: '@deepseek-ai/dsh-workspace'",
-    "- name: 'test:api-host'",
+    "- name: 'test:target-gateway-host'",
     '  config:',
     `    cwd: '${root}'`,
+    '    driveAgents: true',
     `- name: '${BRIDGE}'`,
     '  config:',
     `    token: '${TOKEN}'`,
@@ -113,13 +97,12 @@ async function bootComposition(): Promise<{ ctx: Context; port: number; root: st
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRegistry],
     ['@deepseek-ai/dsh-llm', LlmService],
-    ['@deepseek-ai/dsh-agent-loop', AgentLoop],
     ['@deepseek-ai/dsh-storage', Storage],
     ['@deepseek-ai/dsh-storage-json', StorageJson],
     ['@deepseek-ai/dsh-storage-domain', StorageDomain],
     ['test:session-persistence', SessionPersistenceStub],
     ['@deepseek-ai/dsh-workspace', WorkspaceRegistry],
-    ['test:api-host', ApiHost],
+    ['test:target-gateway-host', TargetGatewayHost],
     [BRIDGE, BridgeBrowser],
   ])
   context.loader.internal = {

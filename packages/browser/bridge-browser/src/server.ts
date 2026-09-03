@@ -6,11 +6,11 @@
  * The route this server mounts (`/ext/bridge`) lives OUTSIDE the /api trust
  * fence (which only guards the client-connection routes), so the bridge brings
  * its own authentication: a bearer token presented in the `hello` frame within
- * HELLO_TIMEOUT_MS. Gateway RPCs are dispatched through the same fetch-shaped
- * handler the /api carrier uses (`toFetchHandler`), so schema validation and
- * error envelopes are identical to the GUI path. Methods the /api carrier
- * pins to loopback (`PRIVILEGED_METHODS`) stay loopback-only here regardless
- * of the token, defense in depth for `--host 0.0.0.0` deployments.
+ * HELLO_TIMEOUT_MS. Gateway RPCs are dispatched by the rc.1 Gateway adapter,
+ * which returns the same Connection result envelope used by the GUI path.
+ * Methods the /api carrier pins to loopback (`PRIVILEGED_METHODS`) stay
+ * loopback-only here regardless of the token, defense in depth for
+ * `--host 0.0.0.0` deployments.
  *
  * One active connection at a time: a new authenticated socket replaces the
  * previous one (the old socket is closed and its in-flight tool calls settle
@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer } from 'ws'
-import type { MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
 import {
   BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD,
   BRIDGE_SESSION_PURGE_METHOD,
@@ -33,8 +33,10 @@ import {
   type BridgeFrame,
   type BridgeCaps,
   type ClientFrame,
+  type RespondResult,
   type ToolErrorCode,
 } from './protocol.ts'
+import type { BridgeEventFrame } from './gateway.ts'
 import { SessionPurgeError } from './session-purge.ts'
 import { verifyToken } from './token.ts'
 
@@ -84,10 +86,12 @@ export class BridgeToolError extends Error {
 export interface BridgeServerDeps {
   /** Bearer token the extension must present in `hello`. */
   token: string
-  /** Fetch-shaped gateway carrier (from `toFetchHandler(ctx.apiProxy)`). */
-  apiHandler: { fetch: (request: Request) => Promise<Response> }
-  /** Per-connection event stream (usually `ctx.apiProxy.events.mux`). */
-  openEvents: (signal: AbortSignal) => AsyncIterable<RpcRequest<MuxFrame>>
+  /** Direct rc.1 Gateway adapter for the extension's dotted RPC vocabulary. */
+  rpcHandler: (method: string, payload: unknown, signal: AbortSignal) => Promise<ConnectionRpcResult<unknown>>
+  /** Per-connection stream of extension-facing event frames. */
+  openEvents: (signal: AbortSignal) => AsyncIterable<BridgeEventFrame>
+  /** Submit one rc.1 forwarded Remote Event result, when a question is pending. */
+  respondEvent?: (rpcId: string, result: RespondResult) => Promise<unknown>
   /** Default per-tool-call timeout in ms. */
   toolTimeoutMs: number
   /** Capabilities to echo in `hello.ok` (negotiated snapshot budgets). */
@@ -336,10 +340,7 @@ export class BridgeServer {
       try {
         for await (const envelope of this.deps.openEvents(abort.signal)) {
           if (ws.readyState !== WebSocket.OPEN) break
-          sendFrame(ws, {
-            t: 'event',
-            frame: { rpcId: envelope.rpcId, method: envelope.payload.type, payload: envelope.payload },
-          })
+          sendFrame(ws, { t: 'event', frame: envelope })
         }
       } catch (error: unknown) {
         if (!abort.signal.aborted && ws.readyState === WebSocket.OPEN) {
@@ -460,54 +461,35 @@ export class BridgeServer {
       }
       return
     }
-    const body = JSON.stringify({ type: 'client-request', rpcId: frame.id, method: frame.method, payload: frame.payload })
-    const request = new Request(new URL(`/api/${frame.method}`, 'http://dsh.internal'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body,
-    })
     try {
-      const response = await this.deps.apiHandler.fetch(request)
-      const text = await response.text()
-      if (!response.ok) {
-        sendFrame(conn.ws, { t: 'rpc.result', id: frame.id, ok: false, error: { code: 'http', message: text } })
-        return
-      }
-      let result: unknown
-      try {
-        result = JSON.parse(text)
-      } catch {
-        result = text
-      }
-      sendFrame(conn.ws, { t: 'rpc.result', id: frame.id, ok: true, result })
+      const result = await this.deps.rpcHandler(frame.method, frame.payload, conn.abort.signal)
+      sendFrame(conn.ws, {
+        t: 'rpc.result',
+        id: frame.id,
+        ok: true,
+        result: { type: 'server-response', rpcId: frame.id, result },
+      })
     } catch (error: unknown) {
       sendFrame(conn.ws, { t: 'rpc.result', id: frame.id, ok: false, error: { code: 'internal', message: String(error) } })
     }
   }
 
-  /** Relay a pending host-interaction response through the GUI's /api/respond channel. */
+  /** Relay a pending rc.1 forwarded Remote Event response to the Host Gateway. */
   private async handleRespond(frame: Extract<ClientFrame, { t: 'respond' }>): Promise<void> {
     const conn = this.current
     /* v8 ignore next -- replacement race; a closed socket simply drops the receipt */
     if (conn === null) return
-    const request = new Request(new URL('/api/respond', 'http://dsh.internal'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-response', rpcId: frame.rpcId, result: frame.result }),
-    })
+    if (this.deps.respondEvent === undefined) {
+      sendFrame(conn.ws, {
+        t: 'respond.result',
+        id: frame.id,
+        ok: false,
+        error: { code: 'internal', message: 'forwarded Remote Events are unavailable' },
+      })
+      return
+    }
     try {
-      const response = await this.deps.apiHandler.fetch(request)
-      const text = await response.text()
-      if (!response.ok) {
-        sendFrame(conn.ws, { t: 'respond.result', id: frame.id, ok: false, error: { code: 'http', message: text } })
-        return
-      }
-      let result: unknown
-      try {
-        result = JSON.parse(text)
-      } catch {
-        result = text
-      }
+      const result = await this.deps.respondEvent(frame.rpcId, frame.result)
       sendFrame(conn.ws, { t: 'respond.result', id: frame.id, ok: true, result })
     } catch (error: unknown) {
       sendFrame(conn.ws, { t: 'respond.result', id: frame.id, ok: false, error: { code: 'internal', message: String(error) } })

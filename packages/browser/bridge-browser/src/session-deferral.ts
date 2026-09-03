@@ -1,56 +1,43 @@
 /**
- * Defer real session creation until the first prompt.
+ * Defer real Session creation until the first prompt.
  *
- * The panel calls `session.create` as soon as it connects, but a session that
- * is opened and never used should leave zero trace in the store/GUI. This
- * wrapper answers `session.create` with a provisional id (minted locally,
- * nothing persisted), serves `session.history` for provisional ids as empty,
- * and materializes the real session — same id, original create payload — on
- * the first `session.prompt` for that id. Abandoned provisional ids are
- * pruned after {@link PROVISIONAL_TTL_MS}.
+ * The panel opens a provisional session immediately. This adapter keeps that
+ * id entirely in memory and only forwards `session/create` when the first
+ * `session/prompt` arrives. It wraps the rc.1 Gateway adapter directly; no
+ * legacy host-apiproxy request or response type is involved.
  *
- * @module @yuxianglin/dsh-bridge-browser/src/session-deferral
+ * @module
  */
 
 import { randomUUID } from 'node:crypto'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
-import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { BrowserGateway, GatewayResult } from './gateway.ts'
 
 /** Provisional entries older than this are dropped on the next create. */
 const PROVISIONAL_TTL_MS = 30 * 60_000
 
-type CreateRequest = Parameters<ApiProxy['sessions']['create']>[0]
-type HistoryRequest = Parameters<ApiProxy['sessions']['history']>[0]
-type PromptRequest = Parameters<ApiProxy['sessions']['prompt']>[0]
-
 interface ProvisionalEntry {
-  /** The original create payload, replayed at materialization (keeps cwd/workspaceId). */
-  payload: CreateRequest['payload']
+  /** Original rc.1 `session/create` request body, replayed at materialization. */
+  request: Record<string, unknown>
   createdAt: number
 }
 
 /**
- * Wrap the gateway sessions API so `session.create` returns a provisional id
- * without creating anything; the real session materializes on the first
- * `session.prompt` for that id.
+ * Wrap the Gateway with in-memory session creation deferral.
  *
- * @param api - Gateway API implementation.
- * @param enabled - Whether deferral is active; false returns the API untouched.
- * @param imageLimits - actual host image capability, used for the synthetic
- * empty history before the deferred Session exists.
- * @returns the original API when disabled, otherwise the wrapped API.
+ * @param gateway - canonical rc.1 Gateway adapter.
+ * @param enabled - whether deferral is active.
+ * @param imageLimits - optional image projection exposed by provisional history.
  */
 export function withSessionDeferral(
-  api: ApiProxy,
+  gateway: BrowserGateway,
   enabled: boolean,
   imageLimits?: ImageAttachmentLimits,
-): ApiProxy {
-  if (!enabled) return api
+): BrowserGateway {
+  if (!enabled) return gateway
 
-  const provisional = new Map<SessionId, ProvisionalEntry>()
-  const materializing = new Map<SessionId, ReturnType<ApiProxy['sessions']['create']>>()
+  const provisional = new Map<string, ProvisionalEntry>()
+  const materializing = new Map<string, Promise<GatewayResult>>()
 
   const prune = (): void => {
     const cutoff = Date.now() - PROVISIONAL_TTL_MS
@@ -59,60 +46,75 @@ export function withSessionDeferral(
     }
   }
 
-  const mintedId = (payload: CreateRequest['payload']): SessionId =>
-    payload.sessionId ?? `session-${randomUUID()}` as SessionId
-
-  return {
-    ...api,
-    sessions: {
-      ...api.sessions,
-      async create(request: CreateRequest) {
-        prune()
-        const sessionId = mintedId(request.payload)
-        provisional.set(sessionId, { payload: { ...request.payload }, createdAt: Date.now() })
-        return { rpcId: request.rpcId, result: { ok: true, value: { sessionId } } }
-      },
-      async history(request: HistoryRequest) {
-        if (!provisional.has(request.payload.sessionId)) return api.sessions.history(request)
-        return {
-          rpcId: request.rpcId,
-          result: {
-            ok: true,
-            value: {
-              events: [],
-              hasMore: false,
-              ...(imageLimits === undefined
-                ? {}
-                : { projections: { asOfSeq: -1, values: { imageLimits } } }),
-            },
-          },
-        }
-      },
-      async prompt(request: PromptRequest) {
-        const entry = provisional.get(request.payload.sessionId)
-        if (entry === undefined) return api.sessions.prompt(request)
-        const existing = materializing.get(request.payload.sessionId)
-        const pending = existing ?? api.sessions.create({
-          rpcId: RpcId(randomUUID()),
-          payload: { ...entry.payload, sessionId: request.payload.sessionId },
-        })
-        if (existing === undefined) {
-          materializing.set(request.payload.sessionId, pending)
-          void pending.then(
-            () => { materializing.delete(request.payload.sessionId) },
-            () => { materializing.delete(request.payload.sessionId) },
-          )
-        }
-        const created = await pending
-        if (!created.result.ok) {
-          // The create failure value shape differs from prompt's success
-          // shape; the carrier relays only result.ok/error, so the value
-          // side is irrelevant here.
-          return created as unknown as Awaited<ReturnType<ApiProxy['sessions']['prompt']>>
-        }
-        provisional.delete(request.payload.sessionId)
-        return api.sessions.prompt(request)
-      },
+  const wrapped: BrowserGateway = {
+    request: async (endpoint, args, signal) => {
+      if (endpoint === 'session/create') return deferredCreate(args)
+      if (endpoint === 'session/history') return deferredHistory(args, signal)
+      if (endpoint === 'session/prompt') return deferredPrompt(args, signal)
+      return gateway.request(endpoint, args, signal)
     },
+    open: (endpoint, args, signal) => gateway.open(endpoint, args, signal),
+    respondEvent: (clientId, eventId, outcome, signal) => gateway.respondEvent(clientId, eventId, outcome, signal),
   }
+  return wrapped
+
+  async function deferredCreate(args: Readonly<Record<string, unknown>>): Promise<GatewayResult> {
+    prune()
+    const request = plainRecord(args.request)
+    if (request === undefined) return failure('gateway/arguments-invalid', 'session/create requires a request object')
+    const sessionId = typeof request.sessionId === 'string' && request.sessionId !== ''
+      ? request.sessionId
+      : `session-${randomUUID()}`
+    provisional.set(sessionId, { request: { ...request }, createdAt: Date.now() })
+    return { ok: true, value: { sessionId } }
+  }
+
+  async function deferredHistory(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<GatewayResult> {
+    const sessionId = args.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') return failure('gateway/arguments-invalid', 'sessionId must be a non-empty string')
+    if (!provisional.has(sessionId)) return gateway.request('session/history', args, signal)
+    return {
+      ok: true,
+      value: {
+        events: [],
+        hasMore: false,
+        ...(imageLimits === undefined ? {} : { projections: { asOfSeq: -1, values: { imageLimits } } }),
+      },
+    }
+  }
+
+  async function deferredPrompt(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<GatewayResult> {
+    const request = plainRecord(args.request)
+    const sessionId = request?.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') return gateway.request('session/prompt', args, signal)
+    const entry = provisional.get(sessionId)
+    if (entry === undefined) return gateway.request('session/prompt', args, signal)
+
+    const existing = materializing.get(sessionId)
+    const pending = existing ?? gateway.request('session/create', {
+      request: { ...entry.request, sessionId },
+    }, signal)
+    if (existing === undefined) {
+      materializing.set(sessionId, pending)
+      void pending.then(
+        () => { materializing.delete(sessionId) },
+        () => { materializing.delete(sessionId) },
+      )
+    }
+
+    const created = await pending
+    if (!created.ok) return created
+    provisional.delete(sessionId)
+    return gateway.request('session/prompt', args, signal)
+  }
+}
+
+function failure(code: string, message: string): GatewayResult {
+  return { ok: false, error: { code, message, details: {} } }
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }

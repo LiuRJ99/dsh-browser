@@ -77,9 +77,9 @@ export interface BridgeCaps {
 export type ClientFrame =
   /** First frame, within HELLO_TIMEOUT_MS of socket open. */
   | { t: 'hello'; token: string; caps: BridgeCaps }
-  /** Unary gateway RPC passthrough (method names from the apiproxy RpcMethodMap). */
+  /** Unary Gateway RPC passthrough (the bridge keeps dotted names for the extension). */
   | { t: 'rpc'; id: string; method: string; payload: unknown }
-  /** Answer or cancel a pending host interaction through /api/respond. */
+  /** Answer or cancel a pending rc.1 forwarded Remote Event. */
   | { t: 'respond'; id: string; rpcId: string; result: RespondResult }
   /** Result of a previously dispatched tool call. */
   | { t: 'tool.result'; id: string; ok: true; result: unknown }
@@ -91,13 +91,13 @@ export type ClientFrame =
 export type ServerFrame =
   /** Accepted after a valid `hello`. */
   | { t: 'hello.ok'; caps: BridgeCaps }
-  /** Reply to an `rpc` frame; `result` is the apiproxy ServerResponse envelope. */
+  /** Reply to an `rpc` frame; `result` is the rc.1 Connection ServerResponse envelope. */
   | { t: 'rpc.result'; id: string; ok: true; result: unknown }
   | { t: 'rpc.result'; id: string; ok: false; error: { code: string; message: string } }
   /** Receipt for a `respond` frame (normally `{ accepted: boolean }`). */
   | { t: 'respond.result'; id: string; ok: true; result: unknown }
   | { t: 'respond.result'; id: string; ok: false; error: { code: string; message: string } }
-  /** One gateway event envelope (the same server-request shape the GUI's /api/events.mux carries). */
+  /** One extension-facing event frame projected from rc.1 Remote Events/session follow. */
   | { t: 'event'; frame: { rpcId: string; method: string; payload: unknown } }
   /** A model-requested browser action to execute in the user-controlled tab. */
   | { t: 'tool.call'; id: string; name: string; args: Record<string, unknown>; expiresAt: number; sessionId?: string }

@@ -1,42 +1,41 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SessionId } from '@deepseek-ai/dsh-session'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
-import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
+import type { BrowserGateway, GatewayResult } from '../src/gateway.ts'
 import { withSessionDeferral } from '../src/session-deferral.ts'
 
-type CreateRequest = Parameters<ApiProxy['sessions']['create']>[0]
-type HistoryRequest = Parameters<ApiProxy['sessions']['history']>[0]
-type PromptRequest = Parameters<ApiProxy['sessions']['prompt']>[0]
-
-const PROMPT = (sessionId: ReturnType<typeof SessionId>, rpcId: string): PromptRequest => ({
-  rpcId: RpcId(rpcId),
-  payload: { sessionId, mode: 'queue', content: [] },
-})
+const signal = (): AbortSignal => new AbortController().signal
 
 function apiHarness() {
-  const sessionCreate = vi.fn(async (request: CreateRequest) => ({
-    rpcId: request.rpcId,
-    result: { ok: true as const, value: { sessionId: request.payload.sessionId as ReturnType<typeof SessionId> } },
+  const sessionCreate = vi.fn(async (_args: Readonly<Record<string, unknown>>): Promise<GatewayResult> => ({
+    ok: true,
+    value: { sessionId: 'session-materialized' },
   }))
-  const sessionHistory = vi.fn(async (request: HistoryRequest) => ({
-    rpcId: request.rpcId,
-    result: { ok: true as const, value: { events: [{ event: { type: 'user/message' } }], hasMore: false } },
+  const sessionHistory = vi.fn(async (_args: Readonly<Record<string, unknown>>): Promise<GatewayResult> => ({
+    ok: true,
+    value: { events: [{ event: { type: 'user/message' } }], hasMore: false },
   }))
-  const sessionPrompt = vi.fn(async (request: PromptRequest) => ({
-    rpcId: request.rpcId,
-    result: { ok: true as const, value: { accepted: true } },
+  const sessionPrompt = vi.fn(async (_args: Readonly<Record<string, unknown>>): Promise<GatewayResult> => ({
+    ok: true,
+    value: { accepted: true },
   }))
-  const api = {
-    sessions: { create: sessionCreate, history: sessionHistory, prompt: sessionPrompt },
-  } as unknown as ApiProxy
-  return { api, sessionCreate, sessionHistory, sessionPrompt }
+  const request = vi.fn(async (endpoint: string, args: Readonly<Record<string, unknown>>): Promise<GatewayResult> => {
+    if (endpoint === 'session/create') return sessionCreate(args)
+    if (endpoint === 'session/history') return sessionHistory(args)
+    if (endpoint === 'session/prompt') return sessionPrompt(args)
+    return { ok: true, value: {} }
+  })
+  const api: BrowserGateway = {
+    request,
+    open: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
+    respondEvent: vi.fn(async () => ({ ok: true, value: undefined })),
+  }
+  return { api, request, sessionCreate, sessionHistory, sessionPrompt }
 }
 
-async function provisionalId(wrapped: ApiProxy, rpcId = 'create-rpc'): Promise<ReturnType<typeof SessionId>> {
-  const response = await wrapped.sessions.create({ rpcId: RpcId(rpcId), payload: {} })
-  if (!response.result.ok) throw new Error('unreachable: provisional create must succeed')
-  return response.result.value.sessionId
+async function provisionalId(gateway: BrowserGateway): Promise<string> {
+  const response = await gateway.request('session/create', { request: {} }, signal())
+  if (!response.ok || typeof response.value !== 'object' || response.value === null) throw new Error('unreachable')
+  return (response.value as { sessionId: string }).sessionId
 }
 
 describe('withSessionDeferral', () => {
@@ -56,12 +55,11 @@ describe('withSessionDeferral', () => {
     const { api } = apiHarness()
     const wrapped = withSessionDeferral(api, true)
 
-    const response = await wrapped.sessions.create({
-      rpcId: RpcId('r1'),
-      payload: { sessionId: SessionId('session-fixed') },
-    })
+    const response = await wrapped.request('session/create', {
+      request: { sessionId: 'session-fixed' },
+    }, signal())
 
-    expect(response.result).toEqual({ ok: true, value: { sessionId: SessionId('session-fixed') } })
+    expect(response).toEqual({ ok: true, value: { sessionId: 'session-fixed' } })
   })
 
   it('serves empty history for a provisional id and passes other ids through', async () => {
@@ -69,14 +67,12 @@ describe('withSessionDeferral', () => {
     const wrapped = withSessionDeferral(api, true)
     const id = await provisionalId(wrapped)
 
-    const empty = await wrapped.sessions.history({ rpcId: RpcId('r2'), payload: { sessionId: id } })
-    expect(empty.result).toEqual({ ok: true, value: { events: [], hasMore: false } })
+    const empty = await wrapped.request('session/history', { sessionId: id }, signal())
+    expect(empty).toEqual({ ok: true, value: { events: [], hasMore: false } })
     expect(sessionHistory).not.toHaveBeenCalled()
 
-    await wrapped.sessions.history({ rpcId: RpcId('r3'), payload: { sessionId: SessionId('session-real') } })
-    expect(sessionHistory).toHaveBeenCalledWith(
-      expect.objectContaining({ payload: { sessionId: SessionId('session-real') } }),
-    )
+    await wrapped.request('session/history', { sessionId: 'session-real' }, signal())
+    expect(sessionHistory).toHaveBeenCalledWith({ sessionId: 'session-real' })
   })
 
   it('advertises the real host image limits before a deferred session materializes', async () => {
@@ -92,9 +88,9 @@ describe('withSessionDeferral', () => {
     const wrapped = withSessionDeferral(api, true, imageLimits)
     const id = await provisionalId(wrapped)
 
-    const history = await wrapped.sessions.history({ rpcId: RpcId('history'), payload: { sessionId: id } })
+    const history = await wrapped.request('session/history', { sessionId: id }, signal())
 
-    expect(history.result).toEqual({
+    expect(history).toEqual({
       ok: true,
       value: {
         events: [],
@@ -107,48 +103,42 @@ describe('withSessionDeferral', () => {
   it('materializes the session on the first prompt, replaying the create payload', async () => {
     const { api, sessionCreate, sessionPrompt, sessionHistory } = apiHarness()
     const wrapped = withSessionDeferral(api, true)
-    const created = await wrapped.sessions.create({ rpcId: RpcId('r1'), payload: { cwd: '/work' } })
-    if (!created.result.ok) throw new Error('unreachable: provisional create must succeed')
-    const id = created.result.value.sessionId
-    const prompt = PROMPT(id, 'r2')
+    const created = await wrapped.request('session/create', { request: { cwd: '/work' } }, signal())
+    if (!created.ok || typeof created.value !== 'object' || created.value === null) throw new Error('unreachable')
+    const id = (created.value as { sessionId: string }).sessionId
+    const prompt = { request: { sessionId: id, requestId: 'prompt-1', mode: 'queue', content: [] } }
 
-    await wrapped.sessions.prompt(prompt)
+    await wrapped.request('session/prompt', prompt, signal())
 
-    expect(sessionCreate).toHaveBeenCalledWith({
-      rpcId: expect.anything(),
-      payload: { cwd: '/work', sessionId: id },
-    })
+    expect(sessionCreate).toHaveBeenCalledWith({ request: { cwd: '/work', sessionId: id } })
     expect(sessionPrompt).toHaveBeenCalledWith(prompt)
 
-    // Materialized: history now reaches the gateway.
-    await wrapped.sessions.history({ rpcId: RpcId('r3'), payload: { sessionId: id } })
+    await wrapped.request('session/history', { sessionId: id }, signal())
     expect(sessionHistory).toHaveBeenCalledTimes(1)
   })
 
   it('passes prompts for unknown sessions through untouched', async () => {
     const { api, sessionPrompt } = apiHarness()
     const wrapped = withSessionDeferral(api, true)
+    const prompt = { request: { sessionId: 'session-existing', requestId: 'p1', mode: 'queue', content: [] } }
 
-    await wrapped.sessions.prompt(PROMPT(SessionId('session-existing'), 'r1'))
+    await wrapped.request('session/prompt', prompt, signal())
 
-    expect(sessionPrompt).toHaveBeenCalledTimes(1)
+    expect(sessionPrompt).toHaveBeenCalledWith(prompt)
   })
 
   it('deduplicates concurrent prompts into one materialization', async () => {
     const { api, sessionCreate, sessionPrompt } = apiHarness()
     let release!: () => void
-    sessionCreate.mockImplementationOnce(async (request: CreateRequest) => {
+    sessionCreate.mockImplementationOnce(async () => {
       await new Promise<void>((resolve) => { release = resolve })
-      return {
-        rpcId: request.rpcId,
-        result: { ok: true as const, value: { sessionId: request.payload.sessionId as ReturnType<typeof SessionId> } },
-      }
+      return { ok: true, value: { sessionId: 'session-materialized' } }
     })
     const wrapped = withSessionDeferral(api, true)
     const id = await provisionalId(wrapped)
 
-    const first = wrapped.sessions.prompt(PROMPT(id, 'p1'))
-    const second = wrapped.sessions.prompt(PROMPT(id, 'p2'))
+    const first = wrapped.request('session/prompt', { request: { sessionId: id, requestId: 'p1', mode: 'queue', content: [] } }, signal())
+    const second = wrapped.request('session/prompt', { request: { sessionId: id, requestId: 'p2', mode: 'queue', content: [] } }, signal())
     release()
     await Promise.all([first, second])
 
@@ -159,24 +149,18 @@ describe('withSessionDeferral', () => {
   it('propagates a materialization failure without forwarding the prompt, and retries later', async () => {
     const { api, sessionCreate, sessionPrompt } = apiHarness()
     sessionCreate.mockResolvedValueOnce({
-      rpcId: RpcId('materialize'),
-      result: {
-        ok: false as const,
-        error: { code: 'internal' as const, message: 'boom', details: {} },
-      },
-    })
-    const wrapped = withSessionDeferral(api, true)
-    const id = await provisionalId(wrapped)
-
-    const failed = await wrapped.sessions.prompt(PROMPT(id, 'p1'))
-    expect(failed.result).toEqual({
       ok: false,
       error: { code: 'internal', message: 'boom', details: {} },
     })
+    const wrapped = withSessionDeferral(api, true)
+    const id = await provisionalId(wrapped)
+    const first = { request: { sessionId: id, requestId: 'p1', mode: 'queue', content: [] } }
+
+    const failed = await wrapped.request('session/prompt', first, signal())
+    expect(failed).toEqual({ ok: false, error: { code: 'internal', message: 'boom', details: {} } })
     expect(sessionPrompt).not.toHaveBeenCalled()
 
-    // The entry survives the failure: a later prompt retries materialization.
-    await wrapped.sessions.prompt(PROMPT(id, 'p2'))
+    await wrapped.request('session/prompt', { request: { sessionId: id, requestId: 'p2', mode: 'queue', content: [] } }, signal())
     expect(sessionCreate).toHaveBeenCalledTimes(2)
     expect(sessionPrompt).toHaveBeenCalledTimes(1)
   })
@@ -186,12 +170,12 @@ describe('withSessionDeferral', () => {
     sessionCreate.mockRejectedValueOnce(new Error('create exploded'))
     const wrapped = withSessionDeferral(api, true)
     const id = await provisionalId(wrapped)
+    const first = { request: { sessionId: id, requestId: 'p1', mode: 'queue', content: [] } }
 
-    await expect(wrapped.sessions.prompt(PROMPT(id, 'p1'))).rejects.toThrow('create exploded')
+    await expect(wrapped.request('session/prompt', first, signal())).rejects.toThrow('create exploded')
     expect(sessionPrompt).not.toHaveBeenCalled()
 
-    // The cleanup ran: a later prompt retries materialization.
-    await wrapped.sessions.prompt(PROMPT(id, 'p2'))
+    await wrapped.request('session/prompt', { request: { sessionId: id, requestId: 'p2', mode: 'queue', content: [] } }, signal())
     expect(sessionCreate).toHaveBeenCalledTimes(2)
     expect(sessionPrompt).toHaveBeenCalledTimes(1)
   })
@@ -200,21 +184,19 @@ describe('withSessionDeferral', () => {
     vi.useFakeTimers()
     const { api, sessionHistory } = apiHarness()
     const wrapped = withSessionDeferral(api, true)
-    const first = await provisionalId(wrapped, 'c1')
+    const first = await provisionalId(wrapped)
 
     vi.advanceTimersByTime(31 * 60_000)
-    const second = await provisionalId(wrapped, 'c2')
+    const second = await provisionalId(wrapped)
 
-    // The stale id now reaches the gateway; the fresh id stays provisional.
-    await wrapped.sessions.history({ rpcId: RpcId('h1'), payload: { sessionId: first } })
+    await wrapped.request('session/history', { sessionId: first }, signal())
     expect(sessionHistory).toHaveBeenCalledTimes(1)
-    await wrapped.sessions.history({ rpcId: RpcId('h2'), payload: { sessionId: second } })
+    await wrapped.request('session/history', { sessionId: second }, signal())
     expect(sessionHistory).toHaveBeenCalledTimes(1)
   })
 
-  it('returns the original API when disabled', () => {
+  it('returns the original Gateway when disabled', () => {
     const { api } = apiHarness()
-
     expect(withSessionDeferral(api, false)).toBe(api)
   })
 })

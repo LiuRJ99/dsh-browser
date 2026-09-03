@@ -22,11 +22,9 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-attachment'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-tools'
-import type {} from '@deepseek-ai/dsh-host-apiproxy'
+import type {} from '@deepseek-ai/dsh-api-gateway'
+import type {} from '@deepseek-ai/dsh-api-remotes'
 import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
-import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
-import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api'
-import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { BridgeServer } from './server.ts'
 import { serveBrowserControl, BRIDGE_CONTROL_PATH } from './control.ts'
@@ -38,6 +36,13 @@ import {
   DEFAULT_SNAPSHOT_MAX_CHARS,
   MIN_SNAPSHOT_MAX_CHARS,
 } from './protocol.ts'
+import {
+  createBrowserGateway,
+  dispatchBrowserRpc,
+  eventFromFollowFrame,
+  type BridgeEventFrame,
+  type BrowserGateway,
+} from './gateway.ts'
 import { withSessionDeferral } from './session-deferral.ts'
 import { withSessionWorkspace } from './session-workspace.ts'
 import { purgeSessionFiles, type SessionPurgeDeps } from './session-purge.ts'
@@ -47,7 +52,7 @@ import { resolveToken } from './token.ts'
 export const name = 'bridge-browser'
 
 /** Services required by this plugin. */
-export const inject = ['webServer', 'apiProxy', 'tools', 'agents']
+export const inject = ['webServer', 'connection', 'typertGateway', 'tools', 'agents']
 
 /** Default per-tool-call budget (ms). */
 const DEFAULT_TOOL_TIMEOUT_MS = 90_000
@@ -173,11 +178,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const resolved = resolveConfig(config)
 
   const tokenRes = await resolveToken(resolved.token)
-  // Workspace grouping wraps the gateway create; session deferral wraps the
-  // result so materialization at first prompt still flows through grouping.
-  const api: ApiProxy = withSessionDeferral(
+  // Workspace grouping wraps target Session creation; session deferral wraps
+  // the result so materialization at first prompt still flows through grouping.
+  const baseGateway = createBrowserGateway(ctx)
+  const gateway = withSessionDeferral(
     withSessionWorkspace(
-      ctx.apiProxy,
+      baseGateway,
       resolved.sessionWorkspacePath,
       message => { ctx.logger.warn(message) },
     ),
@@ -190,10 +196,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const purgeSession = async (sessionId: string): Promise<void> => {
     const runningSessionIds = new Set<string>()
     try {
-      const listed = await api.sessions.list({ rpcId: RpcId(randomUUID()), payload: {} })
-      if (listed.result.ok) {
-        for (const entry of listed.result.value.items) {
-          if (entry.running) runningSessionIds.add(entry.sessionId)
+      const listed = await baseGateway.request('session/list', { _request: {} }, new AbortController().signal)
+      if (listed.ok && isRecord(listed.value) && Array.isArray(listed.value.items)) {
+        for (const entry of listed.value.items) {
+          if (!isRecord(entry)) continue
+          const entrySessionId = entry.sessionId
+          const running = entry.running
+          if (typeof entrySessionId !== 'string' || typeof running !== 'boolean') continue
+          if (running) runningSessionIds.add(entrySessionId)
         }
       }
     } catch {
@@ -204,10 +214,26 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     await purgeSessionFiles(deps, sessionId)
   }
 
+  let eventClientId: string | undefined
+  const pendingEventIds = new Set<string>()
   const server = new BridgeServer({
     token: tokenRes.token,
-    apiHandler: toFetchHandler(api),
-    openEvents: (signal) => api.events.mux({ rpcId: RpcId(randomUUID()), payload: {} }, signal),
+    rpcHandler: (method, payload, signal) => dispatchBrowserRpc(gateway, method, payload, signal),
+    openEvents: (signal) => openBridgeEvents(baseGateway, signal, {
+      onReady: (clientId) => { eventClientId = clientId },
+      onPending: (eventId) => { pendingEventIds.add(eventId) },
+      onFinished: (eventId) => { pendingEventIds.delete(eventId) },
+      onClosed: () => {
+        eventClientId = undefined
+        pendingEventIds.clear()
+      },
+    }),
+    respondEvent: (rpcId, result) => {
+      if (eventClientId === undefined || !pendingEventIds.has(rpcId)) {
+        return Promise.resolve({ accepted: false, reason: 'not-pending' })
+      }
+      return submitRemoteEventResult(baseGateway, eventClientId, rpcId, result)
+    },
     toolTimeoutMs: resolved.toolTimeoutMs,
     caps: {
       textOnly: true,
@@ -292,4 +318,265 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       : `browser bridge: using token from ${tokenRes.file}`,
   )
   ctx.logger.info(`browser bridge: listening on ${BRIDGE_PATH}`)
+}
+
+interface EventCallbacks {
+  onReady: (clientId: string) => void
+  onPending: (eventId: string) => void
+  onFinished: (eventId: string) => void
+  onClosed: () => void
+}
+
+/**
+ * Adapt rc.1's Gateway-owned Remote Event stream to the extension's event
+ * vocabulary. The Gateway event source intentionally carries only Host
+ * notifications, so each known Session is also followed through the target
+ * `session/follow` stream to keep conversation rows live.
+ */
+function openBridgeEvents(
+  gateway: BrowserGateway,
+  signal: AbortSignal,
+  callbacks: EventCallbacks,
+): AsyncIterable<BridgeEventFrame> {
+  return bridgeEventIterator(gateway, signal, callbacks)
+}
+
+async function* bridgeEventIterator(
+  gateway: BrowserGateway,
+  signal: AbortSignal,
+  callbacks: EventCallbacks,
+): AsyncGenerator<BridgeEventFrame> {
+  const queue = new BridgeEventQueue()
+  const followControllers = new Map<string, AbortController>()
+  const followTasks = new Set<Promise<void>>()
+  const pendingQuestions = new Map<string, string>()
+
+  const startFollow = (sessionId: string): void => {
+    if (sessionId === '' || followControllers.has(sessionId)) return
+    const controller = new AbortController()
+    followControllers.set(sessionId, controller)
+    const followSignal = AbortSignal.any([signal, controller.signal])
+    const task = (async () => {
+      try {
+        const source = await gateway.open('session/follow', {
+          request: { address: { kind: 'session', sessionId } },
+        }, followSignal)
+        for await (const value of source) {
+          if (followSignal.aborted) return
+          const event = eventFromFollowFrame(value)
+          if (event === undefined || event.type === 'turn/start' || event.type === 'turn/end') continue
+          queue.push({
+            rpcId: randomUUID(),
+            method: 'session/event',
+            payload: { sessionId, event },
+          })
+        }
+      } catch {
+        // One cold or already-disposed session must not take down the shared
+        // event pump. The next list/status event can re-establish a follower.
+      } finally {
+        if (followControllers.get(sessionId) === controller) followControllers.delete(sessionId)
+      }
+    })()
+    followTasks.add(task)
+    void task.then(() => { followTasks.delete(task) }, () => { followTasks.delete(task) })
+  }
+
+  const eventTask = (async () => {
+    try {
+      const source = await gateway.open('$events', {}, signal)
+      for await (const value of source) {
+        if (signal.aborted) return
+        const frame = remoteEventFrame(value)
+        if (frame === undefined) continue
+        switch (frame.type) {
+          case 'ready':
+            callbacks.onReady(frame.clientId)
+            break
+          case 'waterfall':
+            if (frame.event === 'user-questions/request') {
+              const sessionId = frame.agentId
+              const questions = isRecord(frame.request) ? frame.request.questions : undefined
+              if (sessionId !== '' && Array.isArray(questions)) {
+                pendingQuestions.set(frame.eventId, sessionId)
+                callbacks.onPending(frame.eventId)
+                queue.push({
+                  rpcId: frame.eventId,
+                  method: 'question/requested',
+                  payload: { sessionId, questions },
+                })
+              }
+            }
+            break
+          case 'cancel': {
+            const sessionId = pendingQuestions.get(frame.eventId)
+            pendingQuestions.delete(frame.eventId)
+            callbacks.onFinished(frame.eventId)
+            if (sessionId !== undefined) {
+              queue.push({
+                rpcId: randomUUID(),
+                method: 'question/resolved',
+                payload: { sessionId, questionRpcId: frame.eventId },
+              })
+            }
+            break
+          }
+          case 'emit':
+            handleRemoteEvent(frame.event, frame.args, queue, startFollow)
+            break
+        }
+      }
+      if (!signal.aborted) queue.fail(new Error('Remote Event stream ended unexpectedly'))
+    } catch (error: unknown) {
+      if (!signal.aborted) queue.fail(error)
+    }
+  })()
+
+  const listTask = (async () => {
+    const listed = await gateway.request('session/list', { _request: {} }, signal)
+    if (!listed.ok || !isRecord(listed.value) || !Array.isArray(listed.value.items)) return
+    for (const entry of listed.value.items) {
+      if (isRecord(entry) && typeof entry.sessionId === 'string') startFollow(entry.sessionId)
+    }
+  })().catch((error: unknown) => {
+    if (!signal.aborted) queue.fail(error)
+  })
+
+  try {
+    yield* queue.iterate(signal)
+  } finally {
+    for (const controller of followControllers.values()) controller.abort()
+    queue.end()
+    await Promise.allSettled([eventTask, listTask, ...followTasks])
+    callbacks.onClosed()
+  }
+}
+
+/** Submit one panel answer to the target Gateway-owned event continuation. */
+async function submitRemoteEventResult(
+  gateway: BrowserGateway,
+  clientId: string,
+  eventId: string,
+  result: import('./protocol.ts').RespondResult,
+): Promise<{ accepted: true }> {
+  const outcome = result.ok
+    ? {
+        kind: 'result' as const,
+        value: answerValue(result.value),
+      }
+    : {
+        kind: 'rejected' as const,
+        error: {
+          name: 'Error',
+          message: result.error.message,
+          code: result.error.code,
+          details: result.error.details,
+        },
+      }
+  const response = await gateway.respondEvent(clientId, eventId, outcome, new AbortController().signal)
+  if (!response.ok) throw new Error(response.error.message)
+  return { accepted: true }
+}
+
+function answerValue(value: unknown): unknown {
+  if (!isRecord(value)) return value
+  return value.answer ?? value
+}
+
+function handleRemoteEvent(
+  event: string,
+  args: readonly unknown[],
+  queue: BridgeEventQueue,
+  startFollow: (sessionId: string) => void,
+): void {
+  if (event === 'api-session/added') {
+    const summary = args[0]
+    const sessionId = isRecord(summary) && typeof summary.sessionId === 'string' ? summary.sessionId : undefined
+    if (sessionId !== undefined) startFollow(sessionId)
+    return
+  }
+  if (event === 'api-session/removed') return
+  if (event === 'api-session/status') {
+    const sessionId = args[0]
+    const running = args[1]
+    if (typeof sessionId !== 'string' || typeof running !== 'boolean') return
+    startFollow(sessionId)
+    queue.push({
+      rpcId: randomUUID(),
+      method: 'session/event',
+      payload: { sessionId, event: { type: running ? 'turn/start' : 'turn/end', data: {} } },
+    })
+  }
+}
+
+type RemoteEventFrame =
+  | { type: 'ready'; clientId: string }
+  | { type: 'emit'; event: string; args: readonly unknown[] }
+  | { type: 'waterfall'; event: string; eventId: string; agentId: string; request: Record<string, unknown> }
+  | { type: 'cancel'; eventId: string }
+
+function remoteEventFrame(value: unknown): RemoteEventFrame | undefined {
+  if (!isRecord(value) || typeof value.type !== 'string') return undefined
+  if (value.type === 'ready' && typeof value.clientId === 'string') return { type: 'ready', clientId: value.clientId }
+  if (value.type === 'emit' && typeof value.event === 'string' && Array.isArray(value.args)) {
+    return { type: 'emit', event: value.event, args: value.args }
+  }
+  if (value.type === 'waterfall'
+    && typeof value.event === 'string'
+    && typeof value.eventId === 'string'
+    && typeof value.agentId === 'string'
+    && isRecord(value.request)) {
+    return { type: 'waterfall', event: value.event, eventId: value.eventId, agentId: value.agentId, request: value.request }
+  }
+  return value.type === 'cancel' && typeof value.eventId === 'string'
+    ? { type: 'cancel', eventId: value.eventId }
+    : undefined
+}
+
+class BridgeEventQueue {
+  private readonly values: BridgeEventFrame[] = []
+  private waiter: (() => void) | undefined
+  private ended = false
+  private error: unknown
+
+  push(value: BridgeEventFrame): void {
+    if (this.ended) return
+    this.values.push(value)
+    this.waiter?.()
+    this.waiter = undefined
+  }
+
+  fail(error: unknown): void {
+    if (this.ended) return
+    this.error = error
+    this.ended = true
+    this.waiter?.()
+    this.waiter = undefined
+  }
+
+  end(): void {
+    if (this.ended) return
+    this.ended = true
+    this.waiter?.()
+    this.waiter = undefined
+  }
+
+  async *iterate(signal: AbortSignal): AsyncGenerator<BridgeEventFrame> {
+    const onAbort = (): void => { this.end() }
+    signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      while (true) {
+        while (this.values.length > 0) yield this.values.shift()!
+        if (this.error !== undefined) throw this.error
+        if (this.ended || signal.aborted) return
+        await new Promise<void>((resolve) => { this.waiter = resolve })
+      }
+    } finally {
+      signal.removeEventListener('abort', onAbort)
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
