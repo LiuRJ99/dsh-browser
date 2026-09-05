@@ -143,6 +143,33 @@ describe('mergeHistoryRows', () => {
     expect(rows).toEqual([{ seq: 1, kind: 'tool', text: '读取页面', status: 'complete' }])
   })
 
+  it('unwraps nested event envelope frames ({ type: "event", event })', () => {
+    let seq = 0
+    const nextSeq = (): number => { seq += 1; return seq }
+    const wrappedEvents = [
+      {
+        type: 'event',
+        event: ev('user/message', { content: [{ type: 'text', text: '用户提问' }], source: { kind: 'user' } }),
+      },
+      {
+        type: 'event',
+        event: ev('tool/call', { name: 'browser_snapshot', arguments: '{}' }),
+      },
+      {
+        type: 'event',
+        event: ev('tool/result', {}),
+      },
+      {
+        type: 'event',
+        event: ev('assistant/message', { message: { content: [{ type: 'text', text: '模型回答' }] } }),
+      },
+    ] as unknown as Parameters<typeof mergeHistoryRows>[0]
+    const rows = mergeHistoryRows(wrappedEvents, nextSeq, 'zh')
+    expect(rows.map((r) => r.kind)).toEqual(['user', 'tool', 'assistant'])
+    expect(rows[0]!.text).toBe('用户提问')
+    expect(rows[2]!.text).toBe('模型回答')
+  })
+
   it('handles empty history', () => {
     expect(mergeHistoryRows([], () => 0)).toEqual([])
   })

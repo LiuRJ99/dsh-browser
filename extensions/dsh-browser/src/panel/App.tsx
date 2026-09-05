@@ -885,7 +885,16 @@ export function App(): React.JSX.Element {
 
   function applyHistory(id: string, history: HistoryPage): void {
     if (sessionRef.current !== id) return
-    const events = history.events.map((entry) => entry.event)
+    const rawEvents = Array.isArray(history.events) ? history.events : []
+    const events = rawEvents
+      .map((entry) => {
+        const ev = entry?.event as SessionEventView | undefined
+        if (ev && ev.type === 'event' && typeof (ev as unknown as Record<string, unknown>).event === 'object' && (ev as unknown as Record<string, unknown>).event !== null) {
+          return (ev as unknown as Record<string, unknown>).event as SessionEventView
+        }
+        return ev
+      })
+      .filter((ev): ev is SessionEventView => ev !== undefined && ev !== null)
     applyHistoryImageProjection(id, history.projections)
     const historyTitle = latestSessionTitle(events)
     if (historyTitle !== undefined) setSessionTitle(historyTitle)

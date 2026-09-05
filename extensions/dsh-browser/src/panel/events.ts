@@ -135,14 +135,17 @@ export function textFromBlocks(blocks: unknown): string {
 
 /** Map one session event to a row (user/assistant only; tools handled separately). */
 export function rowFromEvent(event: SessionEventView): Row | null {
-  switch (event.type) {
+  const ev = (event.type === 'event' && isRecord((event as unknown as Record<string, unknown>).event))
+    ? (event as unknown as Record<string, unknown>).event as SessionEventView
+    : event
+  switch (ev.type) {
     case 'user/message': {
       // dsh 每轮把运行时常量上下文作为 source.kind='plugin' 的 user/message
       // 记入日志（如 <system-reminder> 注入内容）——它们不是用户消息，
       // 渲染会污染对话流，必须跳过。
-      const source = (event.data as { source?: { kind?: string } } | undefined)?.source
+      const source = (ev.data as { source?: { kind?: string } } | undefined)?.source
       if (source?.kind !== 'user') return null
-      const blocks = event.data?.content
+      const blocks = ev.data?.content
       const text = textFromBlocks(blocks)
       const images = imageRefsFromBlocks(blocks)
       return text.trim() === '' && images.length === 0
@@ -152,7 +155,7 @@ export function rowFromEvent(event: SessionEventView): Row | null {
     case 'assistant/message': {
       // 工具调用也会产生 assistant/message，但其 content 可能只有 tool_use
       // 等非文本块。不要为这种中间事件渲染一个空的 AI 气泡。
-      const blocks = event.data?.message?.content
+      const blocks = ev.data?.message?.content
       const text = textFromBlocks(blocks)
       const images = imageRefsFromBlocks(blocks)
       return text.trim() === '' && images.length === 0
@@ -222,7 +225,10 @@ export function mergeHistoryRows(
     rows.push({ seq: nextSeq(), kind: 'tool', text: label, status: 'complete' })
     pendingTool = null
   }
-  for (const ev of events) {
+  for (const rawEv of events) {
+    const ev = (rawEv.type === 'event' && isRecord((rawEv as unknown as Record<string, unknown>).event))
+      ? (rawEv as unknown as Record<string, unknown>).event as SessionEventView
+      : rawEv
     if (ev.type === 'tool/call') {
       const summary = toolSummary(ev.data?.name ?? 'tool', ev.data?.arguments, locale)
       if (pendingTool === null) pendingTool = { items: [summary], total: 1 }

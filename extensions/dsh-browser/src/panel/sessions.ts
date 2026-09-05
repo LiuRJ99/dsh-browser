@@ -48,7 +48,10 @@ export function projectedSessionTitle(entry: SessionPickerEntry): string | undef
 
 /** Read one durable title update from the ordinary session event stream. */
 export function sessionTitleFromEvent(event: SessionEventView): string | undefined {
-  return event.type === 'session/title' ? normalizeSessionTitle(event.data?.title) : undefined
+  const ev = (event.type === 'event' && typeof (event as unknown as Record<string, unknown>).event === 'object' && (event as unknown as Record<string, unknown>).event !== null)
+    ? (event as unknown as Record<string, unknown>).event as SessionEventView
+    : event
+  return ev.type === 'session/title' ? normalizeSessionTitle(ev.data?.title) : undefined
 }
 
 /** Recover the newest valid title while replaying session.history. */

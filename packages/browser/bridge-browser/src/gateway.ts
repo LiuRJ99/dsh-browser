@@ -232,11 +232,31 @@ export function namedArguments(
   }
 }
 
+function decodeRecord(record: unknown): SessionEvent[] {
+  if (!isRecord(record)) return []
+  if (record.type === 'event' && isRecord(record.event)) {
+    return [record.event as unknown as SessionEvent]
+  }
+  if (record.type === 'chunks' && isRecord(record.event) && typeof record.event.type === 'string') {
+    const rawTag = record.event.type.startsWith('chunkrow/')
+      ? record.event.type.slice('chunkrow/'.length)
+      : record.event.type
+    const row = {
+      type: rawTag,
+      seq0: record.event.seq,
+      time0: record.event.time,
+      data: record.event.data,
+    }
+    return decodeStorageRecord(row)
+  }
+  return decodeStorageRecord(record)
+}
+
 /** Flatten target history records, including rc.1 packed chunk rows. */
 export function eventsFromRecords(records: readonly unknown[]): Array<{ event: SessionEvent }> {
   const events: Array<{ event: SessionEvent }> = []
   for (const record of records) {
-    for (const event of decodeStorageRecord(record)) events.push({ event })
+    for (const event of decodeRecord(record)) events.push({ event })
   }
   return events
 }
