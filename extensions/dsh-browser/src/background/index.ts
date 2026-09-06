@@ -962,6 +962,39 @@ async function pushBudgetToControlledTab(negotiated: BridgeCaps): Promise<void> 
   }
 }
 
+async function handleAttachTabCall(call: ToolCall): Promise<ToolAnswer> {
+  const rawId = call.args.tabId
+  const tabId = typeof rawId === 'number' && Number.isInteger(rawId) && rawId > 0 ? rawId : undefined
+  if (tabId === undefined) {
+    return { ok: false, error: { code: 'bad-args', message: 'browser_attach_tab: tabId must be a positive integer.' } }
+  }
+  try {
+    const targetTab = await chrome.tabs.get(tabId)
+    const summary = summarizeTab(targetTab)
+    if (summary === null) {
+      return { ok: false, error: { code: 'bad-args', message: `Tab ${tabId} is a protected internal page and cannot be attached.` } }
+    }
+    const sid = call.sessionId ?? tabAffinity.focusedSession() ?? 'default'
+    const previous = tabAffinity.attachSessionTab(sid, summary)
+    if (previous !== undefined && previous.tabId !== tabId && previous.url === 'about:blank') {
+      const otherSessions = tabAffinity.sessionIdsForTab(previous.tabId)
+      if (otherSessions.length === 0 && typeof chrome?.tabs?.remove === 'function') {
+        chrome.tabs.remove(previous.tabId).catch(() => {})
+      }
+    }
+    persistTabAffinity()
+    broadcastTabAffinity()
+    return {
+      ok: true,
+      result: {
+        text: `Successfully attached session to tab ${targetTab.id} ("${targetTab.title || 'Untitled'}" - ${targetTab.url || 'about:blank'}). Subsequent browser actions in this session will operate on this tab.`,
+      },
+    }
+  } catch (err: unknown) {
+    return { ok: false, error: { code: 'bad-args', message: `Tab ${tabId} does not exist or was closed: ${err instanceof Error ? err.message : String(err)}` } }
+  }
+}
+
 /** Route one tool.call frame to the user-approved controlled tab. */
 function routeToolCall(call: ToolCall): void {
   if (bridge === null) return
@@ -972,6 +1005,30 @@ function routeToolCall(call: ToolCall): void {
   const expiryTimer = call.expiresAt === undefined
     ? undefined
     : setTimeout(() => { controller.abort() }, Math.max(0, call.expiresAt - Date.now()))
+
+  if (call.name === 'browser_attach_tab') {
+    void handleAttachTabCall(call).then((answer) => {
+      if (controller.signal.aborted) {
+        if (activeToolCalls.get(call.id) === controller) {
+          bridge?.send({
+            t: 'tool.result',
+            id: call.id,
+            ok: false,
+            error: { code: 'action-failed', message: 'Tool call was cancelled' },
+          })
+        }
+        return
+      }
+      if (bridge === null) return
+      if (answer.ok) {
+        bridge.send({ t: 'tool.result', id: call.id, ok: true, result: answer.result })
+      } else {
+        bridge.send({ t: 'tool.result', id: call.id, ok: false, error: answer.error! })
+      }
+    })
+    return
+  }
+
   const budget = caps === null
     ? undefined
     : { maxItems: caps.maxInteractiveItems, maxChars: caps.snapshotMaxChars }

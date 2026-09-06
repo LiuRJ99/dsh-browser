@@ -166,6 +166,7 @@ export const BROWSER_TOOL_NAMES = [
   'browser_download_wait',
   'browser_network_capture',
   'browser_list_tabs',
+  'browser_attach_tab',
 ] as const
 
 /**
@@ -490,6 +491,17 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
     execute: (_args, exec) => call(exec, 'browser_list_tabs', {}),
   })
 
+  const attachTab = (): ToolDefinition => defineTool({
+    name: 'browser_attach_tab',
+    description: 'Attach this session to an existing open browser tab by tabId (from browser_list_tabs). All subsequent browser actions in this session will operate on that tab, enabling subagents or sessions to continue work on an existing page.',
+    parameters: {
+      tabId: { type: 'number', required: true, description: 'The numeric tab ID to attach to.' },
+    },
+    timeoutMs: options.toolTimeoutMs,
+    output: TEXT_OUTPUT,
+    execute: (args, exec) => call(exec, 'browser_attach_tab', args as Record<string, unknown>),
+  })
+
   return [
     snapshot(),
     click(),
@@ -510,6 +522,7 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
     downloadWait(),
     networkCapture(),
     listTabs(),
+    attachTab(),
   ]
 }
 

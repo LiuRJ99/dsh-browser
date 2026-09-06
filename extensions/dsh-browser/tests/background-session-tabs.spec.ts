@@ -246,6 +246,7 @@ describe('per-session tab management and isolation', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ wsUrl: 'ws://127.0.0.1:3080/ext/bridge' }), { status: 200 })))
     vi.stubGlobal('WebSocket', FakeWebSocket)
     await import('../src/background/index.ts')
+    await vi.waitFor(() => { expect(chrome.storage.local.get).toHaveBeenCalled() })
 
     const panel = panelPort()
     chromeMock.onConnect.emit(panel.port)
@@ -313,6 +314,7 @@ describe('per-session tab management and isolation', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ wsUrl: 'ws://127.0.0.1:3080/ext/bridge' }), { status: 200 })))
     vi.stubGlobal('WebSocket', FakeWebSocket)
     await import('../src/background/index.ts')
+    await vi.waitFor(() => { expect(chrome.storage.local.get).toHaveBeenCalled() })
 
     const panel = panelPort()
     chromeMock.onConnect.emit(panel.port)
@@ -360,6 +362,74 @@ describe('per-session tab management and isolation', () => {
         .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean; result?: unknown })
         .filter((frame) => frame.t === 'tool.result')
       expect(results.some((r) => r.id === 'call-heal' && r.ok === true)).toBe(true)
+    })
+  })
+
+  it('allows a subagent or session to attach to an existing tab via browser_attach_tab', async () => {
+    const chromeMock = mockChrome()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ wsUrl: 'ws://127.0.0.1:3080/ext/bridge' }), { status: 200 })))
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    await import('../src/background/index.ts')
+    await vi.waitFor(() => { expect(chrome.storage.local.get).toHaveBeenCalled() })
+
+    const panel = panelPort()
+    chromeMock.onConnect.emit(panel.port)
+
+    await vi.waitFor(() => {
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(0)
+    })
+    const ws = FakeWebSocket.instances.at(-1)!
+    ws.open()
+    await Promise.resolve()
+    ws.receive({
+      t: 'hello.ok',
+      caps: { textOnly: true, snapshotMaxChars: 32000, maxInteractiveItems: 60 },
+    })
+    await vi.waitFor(() => {
+      expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ state: 'connected' }))
+    })
+
+    // 1. Parent session starts on Tab 11
+    panel.onMessage.emit({ type: 'session.active', sessionId: 'parent-session', isNew: true })
+    await vi.waitFor(() => {
+      expect(chromeMock.create).toHaveBeenCalledTimes(1)
+    })
+
+    // 2. Subagent session starts and initially receives its own Tab 12
+    panel.onMessage.emit({ type: 'session.active', sessionId: 'subagent-session', isNew: true })
+    await vi.waitFor(() => {
+      expect(chromeMock.create).toHaveBeenCalledTimes(2)
+    })
+
+    // 3. Subagent calls browser_attach_tab to take over Tab 11
+    ws.receive({
+      t: 'tool.call',
+      id: 'call-attach',
+      name: 'browser_attach_tab',
+      args: { tabId: 11 },
+      sessionId: 'subagent-session',
+      expiresAt: Date.now() + 10000,
+    })
+
+    await vi.waitFor(() => {
+      const results = ws.sent
+        .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean; result?: unknown })
+        .filter((frame) => frame.t === 'tool.result')
+      expect(results.some((r) => r.id === 'call-attach' && r.ok === true)).toBe(true)
+    })
+
+    // 4. Subagent subsequently calls browser_snapshot -> targets Tab 11!
+    ws.receive({
+      t: 'tool.call',
+      id: 'call-subagent-snapshot',
+      name: 'browser_snapshot',
+      args: {},
+      sessionId: 'subagent-session',
+      expiresAt: Date.now() + 10000,
+    })
+
+    await vi.waitFor(() => {
+      expect(chromeMock.sendMessage).toHaveBeenCalledWith(11, expect.objectContaining({ type: 'DSH_ACTION' }), expect.anything())
     })
   })
 })

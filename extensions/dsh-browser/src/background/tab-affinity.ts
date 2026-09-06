@@ -75,6 +75,22 @@ export class TabAffinityController {
     this.revision += 1
   }
 
+  /** Explicitly attach a session to an existing open tab. Returns previous tab if any. */
+  attachSessionTab(sessionId: string, tab: AffinityTab): AffinityTab | undefined {
+    const sid = sessionId.trim()
+    if (sid === '') return undefined
+    const previous = this.sessionTabs.get(sid)
+    this.sessionTabs.set(sid, { ...tab })
+    if (this.focusedSessionId === sid || this.focusedSessionId === null) {
+      this.focusedSessionId = sid
+      this.controlled = { ...tab }
+      this.hasBound = true
+      this.lost = false
+    }
+    this.revision += 1
+    return previous
+  }
+
   /** Remove a session and its tab association. */
   removeSession(sessionId: string): AffinityTab | undefined {
     const sid = sessionId.trim()
