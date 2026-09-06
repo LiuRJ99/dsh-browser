@@ -184,4 +184,46 @@ describe('TabAffinityController', () => {
     expect(restoredAffinity.resolveTarget('session-missing')).toEqual({ kind: 'initial' })
     expect(restoredAffinity.allowsTarget(2, 'session-missing')).toBe(false)
   })
+
+  it('binds and removes dedicated session tabs independently without cross-interference', () => {
+    const affinity = new TabAffinityController()
+    const rev0 = affinity.snapshot().revision
+
+    affinity.bindSession('session-alpha', tab(10, 'Alpha Tab'))
+    expect(affinity.snapshot().revision).toBe(rev0 + 1)
+    expect(affinity.getSessionTab('session-alpha')).toEqual(tab(10, 'Alpha Tab'))
+    expect(affinity.focusedSession()).toBe('session-alpha')
+    expect(affinity.snapshot().controlled).toEqual(tab(10, 'Alpha Tab'))
+
+    affinity.bindSession('session-beta', tab(20, 'Beta Tab'))
+    expect(affinity.getSessionTab('session-beta')).toEqual(tab(20, 'Beta Tab'))
+    // Alpha remains focused until beta is explicitly focused
+    expect(affinity.focusedSession()).toBe('session-alpha')
+    expect(affinity.snapshot().controlled).toEqual(tab(10, 'Alpha Tab'))
+
+    // An external tab switch does NOT block background session execution
+    affinity.observeActive(tab(99, 'User Browsing Tab'))
+    expect(affinity.resolveTarget('session-alpha')).toEqual({ kind: 'target', tab: tab(10, 'Alpha Tab') })
+    expect(affinity.resolveTarget('session-beta')).toEqual({ kind: 'target', tab: tab(20, 'Beta Tab') })
+    expect(affinity.allowsTarget(10, 'session-alpha')).toBe(true)
+    expect(affinity.allowsTarget(20, 'session-alpha')).toBe(false)
+    expect(affinity.allowsTarget(20, 'session-beta')).toBe(true)
+    expect(affinity.allowsTarget(10, 'session-beta')).toBe(false)
+
+    // Focusing beta aligns controlled tab to beta
+    affinity.focusSession('session-beta')
+    expect(affinity.focusedSession()).toBe('session-beta')
+    expect(affinity.snapshot().controlled).toEqual(tab(20, 'Beta Tab'))
+
+    // Removing beta removes its tab mapping and marks state appropriately
+    const removed = affinity.removeSession('session-beta')
+    expect(removed).toEqual(tab(20, 'Beta Tab'))
+    expect(affinity.getSessionTab('session-beta')).toBeUndefined()
+    expect(affinity.resolveTarget('session-beta')).toEqual({ kind: 'initial' })
+    expect(affinity.allowsTarget(20, 'session-beta')).toBe(false)
+
+    // Alpha is unaffected by beta removal
+    expect(affinity.getSessionTab('session-alpha')).toEqual(tab(10, 'Alpha Tab'))
+    expect(affinity.allowsTarget(10, 'session-alpha')).toBe(true)
+  })
 })

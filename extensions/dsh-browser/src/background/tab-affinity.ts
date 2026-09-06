@@ -63,7 +63,32 @@ export class TabAffinityController {
 
   /** Associate a session with its controlled tab. */
   bindSession(sessionId: string, tab: AffinityTab): void {
-    this.sessionTabs.set(sessionId, { ...tab })
+    const sid = sessionId.trim()
+    if (sid === '') return
+    this.sessionTabs.set(sid, { ...tab })
+    if (this.focusedSessionId === sid || this.focusedSessionId === null) {
+      this.focusedSessionId = sid
+      this.controlled = { ...tab }
+      this.hasBound = true
+      this.lost = false
+    }
+    this.revision += 1
+  }
+
+  /** Remove a session and its tab association. */
+  removeSession(sessionId: string): AffinityTab | undefined {
+    const sid = sessionId.trim()
+    const tab = this.sessionTabs.get(sid)
+    if (tab === undefined) return undefined
+    this.sessionTabs.delete(sid)
+    if (this.focusedSessionId === sid) {
+      this.focusedSessionId = null
+      this.controlled = null
+      this.hasBound = true
+      this.lost = true
+    }
+    this.revision += 1
+    return tab
   }
 
   sessionMap(): Record<string, AffinityTab> {

@@ -453,6 +453,31 @@ export async function dispatchToolCall(
     const refreshedTargetError = validateElementTarget(call, tab.id, executionFrames)
     if (refreshedTargetError !== undefined) return refreshedTargetError
   }
+  if (!isInjectablePage(tab.url)) {
+    if (call.name === 'browser_navigate' && typeof call.args.url === 'string' && /^https?:\/\//i.test(call.args.url)) {
+      try {
+        const navWait = waitForNextDocumentReady(tab.id, 0, undefined, signal)
+        await chrome.tabs.update(tab.id, { url: call.args.url })
+        const ready = await navWait.ready
+        if (ready) {
+          const snapshot = await snapshotAfterNavigation(tab.id, call, `Navigated to ${call.args.url}`, effectiveBudget, targetStillAllowed)
+          if (snapshot !== undefined) return snapshot
+        }
+        return { ok: true, result: { text: `Navigated to ${call.args.url}` } }
+      } catch (navError: unknown) {
+        return { ok: false, error: { code: 'action-failed', message: `Navigation failed: ${navError instanceof Error ? navError.message : String(navError)}` } }
+      }
+    }
+    if (call.name === 'browser_snapshot' && (tab.url === 'about:blank' || tab.url === '' || tab.url === 'chrome://newtab/' || tab.url?.startsWith('chrome-extension://'))) {
+      return {
+        ok: true,
+        result: {
+          text: `Title: New Tab\nURL: ${tab.url || 'about:blank'}\nStatus: complete\n\nMain content:\n(Empty browser page. Use browser_navigate with a URL to open any website.)\n\nInteractive elements: none`,
+        },
+      }
+    }
+    return unavailable('The current page does not support browser operations. Switch to a standard http or https page.')
+  }
   try {
     return await dispatchOnce(
       tab.id,
@@ -465,6 +490,20 @@ export async function dispatchToolCall(
     )
   } catch {
     if (isCancelled(call, signal)) return cancelled()
+    if (call.name === 'browser_navigate' && typeof call.args.url === 'string' && /^https?:\/\//i.test(call.args.url)) {
+      try {
+        const navWait = waitForNextDocumentReady(tab.id, 0, undefined, signal)
+        await chrome.tabs.update(tab.id, { url: call.args.url })
+        const ready = await navWait.ready
+        if (ready) {
+          const snapshot = await snapshotAfterNavigation(tab.id, call, `Navigated to ${call.args.url}`, effectiveBudget, targetStillAllowed)
+          if (snapshot !== undefined) return snapshot
+        }
+        return { ok: true, result: { text: `Navigated to ${call.args.url}` } }
+      } catch {
+        // Fall through to standard recovery
+      }
+    }
     // Manifest content scripts do not run retroactively in tabs that were
     // already open when an unpacked extension was installed or reloaded.
     // Recover in place so the user never has to refresh and lose page state.

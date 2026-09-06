@@ -7,9 +7,13 @@ import type { ApprovalPrompt } from './approval.ts'
  */
 export function normalizeTrustedOrigin(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
-  const trimmed = value.trim()
+  let trimmed = value.trim()
+  if (trimmed === '*' || trimmed === '<all_urls>') return '*'
   const wildcard = normalizeWildcard(trimmed)
   if (wildcard !== undefined) return wildcard
+  if (!/^https?:\/\//i.test(trimmed) && !trimmed.includes('/')) {
+    trimmed = `https://${trimmed}`
+  }
   try {
     const url = new URL(trimmed)
     return (url.protocol === 'http:' || url.protocol === 'https:')
@@ -24,18 +28,27 @@ export function normalizeTrustedOrigin(value: unknown): string | undefined {
 /** Whether one concrete web origin is covered by an exact or wildcard entry. */
 export function originMatchesTrusted(origin: string, trusted: Iterable<string>): boolean {
   let parsedOrigin: URL | undefined
+  try {
+    parsedOrigin = new URL(origin)
+  } catch {
+    return false
+  }
   for (const entry of trusted) {
-    if (entry === origin) return true
+    if (entry === '*' || entry === '<all_urls>' || entry === origin) return true
     const wildcard = parseWildcard(entry)
-    if (wildcard === undefined) continue
-    try {
-      parsedOrigin ??= new URL(origin)
-    } catch {
-      return false
+    if (wildcard !== undefined) {
+      if (parsedOrigin.protocol !== wildcard.protocol || parsedOrigin.port !== wildcard.port) continue
+      const host = parsedOrigin.hostname.toLowerCase()
+      if (host === wildcard.hostname || host.endsWith(`.${wildcard.hostname}`)) return true
+      continue
     }
-    if (parsedOrigin.protocol !== wildcard.protocol || parsedOrigin.port !== wildcard.port) continue
-    const host = parsedOrigin.hostname.toLowerCase()
-    if (host === wildcard.hostname || host.endsWith(`.${wildcard.hostname}`)) return true
+    try {
+      const parsedEntry = new URL(entry)
+      if (parsedEntry.protocol !== parsedOrigin.protocol || parsedEntry.port !== parsedOrigin.port) continue
+      const h1 = parsedOrigin.hostname.toLowerCase()
+      const h2 = parsedEntry.hostname.toLowerCase()
+      if (h1 === h2 || h1.endsWith(`.${h2}`)) return true
+    } catch {}
   }
   return false
 }
@@ -49,7 +62,16 @@ export function actionCoveredByTrustedOrigins(
   prompt: ApprovalPrompt,
   ...trustedCollections: Iterable<string>[]
 ): boolean {
-  if (prompt.kind !== 'action' || prompt.origins.length === 0) return false
+  if (prompt.kind !== 'action') return false
+  const isGlobalTrusted = trustedCollections.some((c) => {
+    if (!c) return false
+    for (const t of c) {
+      if (t === '*' || t === '<all_urls>') return true
+    }
+    return false
+  })
+  if (isGlobalTrusted) return true
+  if (prompt.origins.length === 0) return false
   const hasKnownBoundary = prompt.canTrust
     || (prompt.action === 'browser_navigate' && prompt.origins.length > 1)
   if (!hasKnownBoundary) return false

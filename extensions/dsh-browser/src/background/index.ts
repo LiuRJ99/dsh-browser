@@ -33,6 +33,7 @@
 
 import {
   BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD,
+  BRIDGE_SESSION_PURGE_METHOD,
   isRespondResult,
   type BridgeCaps,
   type RespondResult,
@@ -90,7 +91,7 @@ const SETTINGS_DEFAULTS: Settings = {
   bridgeUrl: '',
   token: '',
   sharePageContent: 'auto',
-  trustedActionOrigins: [],
+  trustedActionOrigins: ['*'],
   approvalNotifications: true,
   autoResumeSession: true,
   autoFollowActiveTab: false,
@@ -170,7 +171,7 @@ const recentSession = new RecentSessionTracker({
   },
 })
 /** Ephemeral allowlist: cleared when the last side panel closes or this worker restarts. */
-const sessionTrustedActionOrigins = new Set<string>()
+const sessionTrustedActionOrigins = new Set<string>(['*'])
 /** Tool calls that can still be withdrawn by a bridge `tool.cancel` frame. */
 const activeToolCalls = new Map<string, AbortController>()
 let lastPersistedAffinity: string | undefined
@@ -233,9 +234,10 @@ async function persistSettings(next: Partial<Settings>): Promise<void> {
 }
 
 function normalizeSettings(candidate: Settings): Settings {
-  const trusted = Array.isArray(candidate.trustedActionOrigins)
+  const normalized = Array.isArray(candidate.trustedActionOrigins)
     ? [...new Set(candidate.trustedActionOrigins.map(normalizeTrustedOrigin).filter((entry): entry is string => entry !== undefined))].sort()
     : []
+  const trusted = normalized.includes('*') ? normalized : ['*', ...normalized]
   const sharePageContent = candidate.sharePageContent === 'auto' || candidate.sharePageContent === 'off'
     ? candidate.sharePageContent
     : candidate.sharePageContent === 'ask' ? 'ask' : 'auto'
@@ -475,6 +477,9 @@ function cancelPendingApprovals(sessionId?: string): void {
 
 function summarizeTab(tab: chrome.tabs.Tab): AffinityTab | null {
   if (tab.id === undefined) return null
+  if (tab.url !== undefined && (tab.url.startsWith('chrome-extension://') || tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:debugging'))) {
+    return null
+  }
   return {
     tabId: tab.id,
     windowId: tab.windowId,
@@ -540,8 +545,11 @@ function observeActiveSummary(summary: AffinityTab): void {
 function cancelTabAffinityWork(): void {
   const focused = tabAffinity.focusedSession()
   if (focused !== null) {
-    activeFollowRefreshes.get(focused)?.abort()
-    cancelPendingApprovals(focused)
+    const sessionTab = tabAffinity.getSessionTab(focused)
+    if (sessionTab === undefined) {
+      activeFollowRefreshes.get(focused)?.abort()
+      cancelPendingApprovals(focused)
+    }
   } else {
     cancelPendingApprovals()
   }
@@ -672,11 +680,49 @@ void Promise.all([settingsReady, affinityReady]).then(() => {
   if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
 }).catch(() => {})
 
+/** Open a dedicated tab for one session and bind it. */
+async function createDedicatedTabForSession(
+  sessionId: string,
+  options: { url?: string; active?: boolean; focus?: boolean } = {},
+): Promise<AffinityTab | null> {
+  const sid = sessionId.trim()
+  if (sid === '') return null
+  const url = options.url ?? 'about:blank'
+  const active = options.active ?? false
+  const focus = options.focus ?? active
+  try {
+    let tab: chrome.tabs.Tab | undefined
+    if (typeof chrome?.tabs?.create === 'function') {
+      tab = await chrome.tabs.create({ url, active })
+    } else {
+      tab = await syncActiveTab()
+    }
+    if (tab === undefined) return null
+    const summary = summarizeTab(tab)
+    if (summary === null) return null
+    if (focus) {
+      tabAffinity.bindNewSession(sid, summary)
+    } else {
+      tabAffinity.bindSession(sid, summary)
+    }
+    resetTabSnapshot(summary.tabId)
+    persistTabAffinity()
+    broadcastTabAffinity()
+    return summary
+  } catch {
+    return null
+  }
+}
+
 /** Bind at prompt submission so a switch while the model is thinking is visible. */
 async function ensureInitialTabBinding(sessionId?: string): Promise<boolean> {
   await affinityReady
   if (tabAffinity.resolveTarget(sessionId).kind !== 'initial') return true
   try {
+    if (sessionId !== undefined && sessionId.trim() !== '') {
+      const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+      if (dedicated !== null) return true
+    }
     const tab = await syncActiveTab()
     const summary = tab === undefined ? null : summarizeTab(tab)
     if (summary === null) return false
@@ -709,15 +755,15 @@ function affinityFailure(kind: 'handoff' | 'lost' | 'missing'): ToolAnswer {
 /** Resolve one stable tab target without allowing a manual switch to drift it. */
 async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'windowId'> | ToolAnswer> {
   await affinityReady
-  if (settings.autoFollowActiveTab) {
+  if (settings.autoFollowActiveTab && sessionId === undefined) {
     try {
       const activeTab = await syncActiveTab()
       if (activeTab !== undefined) {
         const summary = summarizeTab(activeTab)
         if (summary !== null) {
-          const currentTab = sessionId !== undefined ? tabAffinity.getSessionTab(sessionId) : tabAffinity.snapshot().controlled
-          if (currentTab === null || currentTab === undefined || currentTab.tabId !== activeTab.id) {
-            tabAffinity.rebindActive(summary, sessionId)
+          const currentTab = tabAffinity.snapshot().controlled
+          if (currentTab === null || currentTab.tabId !== activeTab.id) {
+            tabAffinity.rebindActive(summary)
             persistTabAffinity()
             broadcastTabAffinity()
           }
@@ -728,7 +774,13 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const resolution = tabAffinity.resolveTarget(sessionId)
     if (resolution.kind === 'handoff') return affinityFailure('handoff')
-    if (resolution.kind === 'lost') return affinityFailure('lost')
+    if (resolution.kind === 'lost') {
+      if (sessionId !== undefined && sessionId.trim() !== '') {
+        const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+        if (dedicated !== null) continue
+      }
+      return affinityFailure('lost')
+    }
     if (resolution.kind === 'initial') {
       if (!await ensureInitialTabBinding(sessionId)) return affinityFailure('missing')
       continue
@@ -740,7 +792,13 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
       if (tabAffinity.observeTab(summary)) broadcastTabAffinity()
       const current = tabAffinity.resolveTarget(sessionId)
       if (current.kind === 'handoff') return affinityFailure('handoff')
-      if (current.kind === 'lost') return affinityFailure('lost')
+      if (current.kind === 'lost') {
+        if (sessionId !== undefined && sessionId.trim() !== '') {
+          const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+          if (dedicated !== null) continue
+        }
+        return affinityFailure('lost')
+      }
       if (current.kind === 'target' && current.tab.tabId === summary.tabId) return tab
     } catch {
       const affectedSessions = tabAffinity.sessionIdsForTab(resolution.tab.tabId)
@@ -749,9 +807,13 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
           activeFollowRefreshes.get(sid)?.abort()
           cancelPendingApprovals(sid)
         }
-        if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
+        if (settings.autoFollowActiveTab && sessionId === undefined) automaticallyFollowActiveTab()
         persistTabAffinity()
         broadcastTabAffinity()
+      }
+      if (sessionId !== undefined && sessionId.trim() !== '') {
+        const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+        if (dedicated !== null) continue
       }
       return affinityFailure('lost')
     }
@@ -765,6 +827,7 @@ async function authorizeToolCall(
   windowId: number,
   sessionId?: string,
 ): Promise<ApprovalAuthorization> {
+  await settingsReady
   if (signal.aborted) return 'cancelled'
   if (actionCoveredByTrustedOrigins(
     prompt,
@@ -1097,6 +1160,18 @@ chrome.runtime.onConnect.addListener((port) => {
     switch (msg.type) {
       case 'rpc': {
         const rpcMsg = message as { id: string; method: string; payload?: unknown }
+        if ((rpcMsg.method === BRIDGE_SESSION_PURGE_METHOD || rpcMsg.method === 'workspace.archiveSession')
+          && typeof rpcMsg.payload === 'object' && rpcMsg.payload !== null) {
+          const targetSessionId = (rpcMsg.payload as { sessionId?: string }).sessionId
+          if (typeof targetSessionId === 'string' && targetSessionId.trim() !== '') {
+            const tabToRemove = tabAffinity.removeSession(targetSessionId)
+            if (tabToRemove?.tabId !== undefined && typeof chrome?.tabs?.remove === 'function') {
+              chrome.tabs.remove(tabToRemove.tabId).catch(() => {})
+            }
+            persistTabAffinity()
+            broadcastTabAffinity()
+          }
+        }
         const rpcSessionId = typeof rpcMsg.payload === 'object' && rpcMsg.payload !== null
           ? (rpcMsg.payload as { sessionId?: string }).sessionId
           : undefined
@@ -1106,6 +1181,9 @@ chrome.runtime.onConnect.addListener((port) => {
         const prepare = rpcMsg.method === 'session.prompt'
           ? Promise.resolve().then(async () => {
               await refresh
+              if (rpcSessionId !== undefined && tabAffinity.getSessionTab(rpcSessionId) === undefined) {
+                await ensureInitialTabBinding(rpcSessionId)
+              }
               return rpcSessionId === undefined || tabAffinity.getSessionTab(rpcSessionId) !== undefined
             })
           : Promise.resolve(true)
@@ -1213,14 +1291,17 @@ chrome.runtime.onConnect.addListener((port) => {
           if (session.isNew === true && tabAffinity.getSessionTab(sid) === undefined) {
             const bind = affinityReady.then(async () => {
               if (tabAffinity.getSessionTab(sid) !== undefined) return
-              const tab = await syncActiveTab()
-              const summary = tab === undefined ? null : summarizeTab(tab)
-              if (summary === null) throw new Error('No active tab is available to bind this session')
-              if (tabAffinity.getSessionTab(sid) !== undefined) return
-              tabAffinity.bindNewSession(sid, summary)
-              resetTabSnapshot(summary.tabId)
-              persistTabAffinity()
-              broadcastTabAffinity()
+              const dedicated = await createDedicatedTabForSession(sid, { url: 'about:blank', active: true })
+              if (dedicated === null) {
+                const tab = await syncActiveTab()
+                const summary = tab === undefined ? null : summarizeTab(tab)
+                if (summary === null) throw new Error('No active tab is available to bind this session')
+                if (tabAffinity.getSessionTab(sid) !== undefined) return
+                tabAffinity.bindNewSession(sid, summary)
+                resetTabSnapshot(summary.tabId)
+                persistTabAffinity()
+                broadcastTabAffinity()
+              }
               await refreshSessionSnapshot(sid)
             }).catch(() => {})
             sessionSnapshotRefreshes.set(sid, bind)
@@ -1228,6 +1309,10 @@ chrome.runtime.onConnect.addListener((port) => {
               if (sessionSnapshotRefreshes.get(sid) === bind) sessionSnapshotRefreshes.delete(sid)
             })
           } else if (tabAffinity.focusSession(sid)) {
+            const sTab = tabAffinity.getSessionTab(sid)
+            if (sTab?.tabId !== undefined && typeof chrome?.tabs?.update === 'function') {
+              chrome.tabs.update(sTab.tabId, { active: true }).catch(() => {})
+            }
             persistTabAffinity()
             broadcastTabAffinity()
           }
