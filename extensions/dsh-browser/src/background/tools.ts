@@ -453,6 +453,7 @@ export async function dispatchToolCall(
     const refreshedTargetError = validateElementTarget(call, tab.id, executionFrames)
     if (refreshedTargetError !== undefined) return refreshedTargetError
   }
+  if (call.name === 'browser_list_tabs') return runListTabs()
   if (!isInjectablePage(tab.url)) {
     if (call.name === 'browser_navigate' && typeof call.args.url === 'string' && /^https?:\/\//i.test(call.args.url)) {
       try {
