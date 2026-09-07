@@ -168,6 +168,43 @@ const BROWSER_SKILL = {
 } as const
 
 /**
+ * Service name is structural so this plugin never depends on the optional
+ * dsh-tool-lazy-gate package; the gate degrades to open when it is absent.
+ */
+const TOOL_LAZY_GATE_SERVICE = 'toolLazyGate'
+
+interface ToolLazyGateServiceLike {
+  isUnlocked?(agent: unknown, skillName: string): boolean
+}
+
+/** Resolve the lazy-gate host service through the current or root scope. */
+function lazyGateService(ctx: Context): ToolLazyGateServiceLike | undefined {
+  try {
+    const service = ctx.get(TOOL_LAZY_GATE_SERVICE) as ToolLazyGateServiceLike | undefined
+    if (service !== undefined) return service
+    const root = (ctx as unknown as { root?: Context | null }).root
+    return root === undefined || root === null
+      ? undefined
+      : (root.get(TOOL_LAZY_GATE_SERVICE) as ToolLazyGateServiceLike | undefined)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Snapshot-delivery gate: open only when the target session's browser
+ * capability is unlocked. Without a lazy-gate service (or when the session
+ * does not gate `browser` at all) every session is treated as open, so a
+ * standalone bridge keeps its historical un-gated behavior.
+ */
+function browserCapabilityOpen(ctx: Context, agent: unknown): boolean {
+  const service = lazyGateService(ctx)
+  return service?.isUnlocked === undefined
+    ? true
+    : service.isUnlocked(agent, BROWSER_SKILL.name) !== false
+}
+
+/**
  * Mount the bridge: resolve the token, register the upgrade route, the tool
  * set, and an optional system-prompt section, all effect-scoped for HMR.
  *
@@ -190,8 +227,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     resolved.deferSessionCreate,
     ctx.get('attachments')?.imageLimits,
   )
-  const browserContext = new BrowserContextInjector(ctx.agents)
+  // Snapshots upload only into sessions whose browser capability is unlocked
+  // (user /browser gesture): while locked, they stay queued and are delivered
+  // by activate/flush once the gate opens. See BrowserContextInjector.
+  const browserContext = new BrowserContextInjector(ctx.agents, undefined, (agent) => browserCapabilityOpen(ctx, agent))
   ctx.on('agent/session-start', ({ agent }) => { browserContext.activate(agent) })
+  // Re-check the gate before every model step: a session unlocked since the
+  // last step (including a subagent inheriting its parent's unlock) picks up
+  // its queued snapshot here.
+  ctx.on('agent/pre-step', ({ agent }, next) => {
+    browserContext.flush(agent)
+    return next()
+  })
 
   const purgeSession = async (sessionId: string): Promise<void> => {
     const runningSessionIds = new Set<string>()
