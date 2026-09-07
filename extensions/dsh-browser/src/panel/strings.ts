@@ -435,9 +435,9 @@ const ZH: PanelCopy = {
     allowOnce: '仅允许这一次',
     alwaysAllowReads: '始终允许读取',
     trustSession: '本次会话信任此域',
-    trustOrigin: '加入可信名单',
+    trustOrigin: '加入信任名单',
     readFootnote: 'Esc 拒绝 · 可随时在设置中关闭自动读取',
-    actionFootnote: 'Esc 拒绝 · 关闭侧栏后会话信任失效 · 可信名单会永久保留 · 输入内容不会显示',
+    actionFootnote: 'Esc 拒绝 · 关闭侧栏后会话信任失效 · 信任名单会永久保留 · 输入内容不会显示',
   },
   tool: {
     running: '正在操作页面',

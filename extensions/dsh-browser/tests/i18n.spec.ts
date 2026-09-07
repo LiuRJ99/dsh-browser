@@ -39,6 +39,6 @@ describe('browser locale selection', () => {
     expect(PANEL_COPY.zh.app.newSession).toBe('新对话')
     expect(PANEL_COPY.zh.app.overviewPage).toBe('先概览这个页面')
     expect(PANEL_COPY.zh.approval.allowOnce).toBe('仅允许这一次')
-    expect(PANEL_COPY.zh.approval.trustOrigin).toBe('加入可信名单')
+    expect(PANEL_COPY.zh.approval.trustOrigin).toBe('加入信任名单')
   })
 })

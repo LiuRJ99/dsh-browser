@@ -46,7 +46,7 @@ describe('ApprovalDialog trusted-origin actions', () => {
     const onDecision = await renderApproval(ACTION)
     const button = container?.querySelector<HTMLButtonElement>('button.origin-trust')
 
-    expect(button?.textContent).toBe('加入可信名单')
+    expect(button?.textContent).toBe('加入信任名单')
     expect(container?.querySelector('button.session-trust')).not.toBeNull()
     await act(async () => { button?.click() })
     expect(onDecision).toHaveBeenCalledWith('trust-origin')
