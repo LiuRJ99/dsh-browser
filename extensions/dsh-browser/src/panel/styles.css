@@ -2335,11 +2335,18 @@ textarea:focus-visible {
 }
 
 .approval-actions .session-trust,
+.approval-actions .origin-trust,
 .approval-actions .read-always {
   grid-column: 1 / -1;
   border: 1px solid var(--security-border);
   background: var(--security-soft);
   color: var(--security);
+}
+
+.approval-actions .origin-trust {
+  border-color: #b8c5ff;
+  background: var(--blue-wash);
+  color: var(--blue-ink);
 }
 
 .approval-actions .deny:hover {
@@ -2357,6 +2364,11 @@ textarea:focus-visible {
 .approval-actions .read-always:hover {
   border-color: #fdb022;
   background: #fff4d6;
+}
+
+.approval-actions .origin-trust:hover {
+  border-color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .approval-footnote {

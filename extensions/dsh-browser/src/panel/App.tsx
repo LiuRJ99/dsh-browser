@@ -29,7 +29,7 @@ import {
   removePendingQuestion,
   upsertPendingQuestion,
 } from './pending-questions.ts'
-import { normalizeTrustedOrigin } from '../security/trusted-origins.ts'
+import { normalizeTrustedOrigin, normalizeTrustedOrigins } from '../security/trusted-origins.ts'
 import type { PageSelection } from '../selection.ts'
 import {
   selectionPromptText,
@@ -364,7 +364,7 @@ function TabAffinityBanner({
   )
 }
 
-function ApprovalDialog({
+export function ApprovalDialog({
   request,
   onDecision,
   copy,
@@ -409,7 +409,10 @@ function ApprovalDialog({
             <button className="read-always" onClick={() => onDecision('always-allow-reads')}>{copy.approval.alwaysAllowReads}</button>
           )}
           {request.kind === 'action' && request.canTrust && request.origins.length === 1 && (
-            <button className="session-trust" onClick={() => onDecision('trust-session')}>{copy.approval.trustSession}</button>
+            <>
+              <button className="session-trust" onClick={() => onDecision('trust-session')}>{copy.approval.trustSession}</button>
+              <button className="origin-trust" onClick={() => onDecision('trust-origin')}>{copy.approval.trustOrigin}</button>
+            </>
           )}
         </div>
         <small className="approval-footnote">
@@ -639,7 +642,10 @@ export function App(): React.JSX.Element {
         bridgeUrl: raw?.bridgeUrl ?? '',
         token: raw?.token ?? '',
         sharePageContent: raw?.sharePageContent ?? 'auto',
-        trustedActionOrigins: raw?.trustedActionOrigins ?? [],
+        trustedActionOrigins: normalizeTrustedOrigins(
+          raw?.trustedActionOrigins,
+          raw?.trustedActionOriginsVersion === 1,
+        ),
         approvalNotifications: raw?.approvalNotifications ?? true,
         autoResumeSession: raw?.autoResumeSession ?? true,
         autoFollowActiveTab: raw?.autoFollowActiveTab ?? false,
@@ -1483,6 +1489,15 @@ export function App(): React.JSX.Element {
       await api.respondToApproval(request.id, decision)
       if (decision === 'always-allow-reads') {
         setSettings((current) => current === null ? current : { ...current, sharePageContent: 'auto' })
+      }
+      if (decision === 'trust-origin' && request.kind === 'action'
+        && request.canTrust && request.origins.length === 1) {
+        const origin = normalizeTrustedOrigin(request.origins[0])
+        if (origin !== undefined) {
+          setSettings((current) => current === null
+            ? current
+            : { ...current, trustedActionOrigins: [...new Set([...current.trustedActionOrigins, origin])].sort() })
+        }
       }
       updateApprovalQueue((current) => current.filter((entry) => entry.id !== request.id))
     } catch (cause) {

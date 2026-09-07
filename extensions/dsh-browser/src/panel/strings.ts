@@ -15,6 +15,7 @@ export interface PanelCopy {
     allowOnce: string
     alwaysAllowReads: string
     trustSession: string
+    trustOrigin: string
     readFootnote: string
     actionFootnote: string
   }
@@ -218,8 +219,9 @@ const EN: PanelCopy = {
     allowOnce: 'Allow once',
     alwaysAllowReads: 'Always allow reads',
     trustSession: 'Trust this domain for this session',
+    trustOrigin: 'Add to trusted list',
     readFootnote: 'Esc to deny · You can disable automatic reading in Settings at any time',
-    actionFootnote: 'Esc to deny · Temporary trust ends when the side panel closes · Typed content is never shown',
+    actionFootnote: 'Esc to deny · Session trust ends when the side panel closes · Trusted-list entries persist · Typed content is never shown',
   },
   tool: {
     running: 'Working on page',
@@ -291,8 +293,8 @@ const EN: PanelCopy = {
     autoFollowActiveTab: 'Automatically follow the active tab',
     autoFollowActiveTabHelp: 'When you switch tabs, move browser control to the new tab without asking. If the controlled tab closes, recover to the active tab automatically when one is available.',
     trustedOrigins: 'Always-allowed domains',
-    trustedOriginsHelp: 'The approval dialog can trust a domain for the current side-panel session only. Domains added here permanently skip action confirmation when every known origin is trusted. Wildcards include the base domain and subdomains, and stay scoped to their scheme and port; `*.example.com` defaults to HTTPS.',
-    trustedOriginInput: 'Domain to always trust (e.g. https://example.com or https://*.example.com)',
+    trustedOriginsHelp: 'The approval dialog can trust a domain for the current side-panel session or add one here permanently. Entries skip action confirmation when every known origin is trusted. Wildcards include the base domain and subdomains, stay scoped to their scheme and port, and `*.example.com` defaults to HTTPS; use `*` only if you intentionally trust every web origin.',
+    trustedOriginInput: 'Domain to always trust (e.g. https://example.com or https://*.example.com; use * only for global trust)',
     add: 'Add',
     invalidOrigin: 'Enter an http:// or https:// origin, or a wildcard such as https://*.example.com.',
     noTrustedOrigins: 'No domains are currently trusted.',
@@ -433,8 +435,9 @@ const ZH: PanelCopy = {
     allowOnce: '仅允许这一次',
     alwaysAllowReads: '始终允许读取',
     trustSession: '本次会话信任此域',
+    trustOrigin: '加入可信名单',
     readFootnote: 'Esc 拒绝 · 可随时在设置中关闭自动读取',
-    actionFootnote: 'Esc 拒绝 · 关闭侧栏后临时信任失效 · 输入内容不会显示',
+    actionFootnote: 'Esc 拒绝 · 关闭侧栏后会话信任失效 · 可信名单会永久保留 · 输入内容不会显示',
   },
   tool: {
     running: '正在操作页面',
@@ -506,8 +509,8 @@ const ZH: PanelCopy = {
     autoFollowActiveTab: '自动跟随当前标签页',
     autoFollowActiveTabHelp: '切换标签页时，自动将浏览器操作切换到新标签页，不再询问。受控标签页关闭后，只要仍有当前标签页可用，也会自动恢复。',
     trustedOrigins: '永久免确认域名',
-    trustedOriginsHelp: '审批框可只信任本次侧栏会话。这里添加的域名仅在所有已知来源均受信任时免除操作确认。通配符包含主域及其子域，并严格区分协议和端口；`*.example.com` 默认使用 HTTPS。',
-    trustedOriginInput: '要永久信任的域名（如 https://example.com 或 https://*.example.com）',
+    trustedOriginsHelp: '审批框可只信任本次侧栏会话，也可将域名永久加入这里。仅当所有已知来源都受信任时，操作才会免确认。通配符包含主域及其子域，并严格区分协议和端口；`*.example.com` 默认使用 HTTPS；只有你明确需要信任所有网页时才使用 `*`。',
+    trustedOriginInput: '要永久信任的域名（如 https://example.com 或 https://*.example.com；* 表示全局信任）',
     add: '添加',
     invalidOrigin: '请输入 http://、https:// 来源或 https://*.example.com 形式的通配符。',
     noTrustedOrigins: '尚未信任任何域名。',

@@ -359,7 +359,8 @@ describe('extension ↔ bridge e2e', () => {
 
     // The first state-changing operation can trust this origin only for the
     // current side-panel lifetime. A second operation on the same origin then
-    // runs without another prompt; persistent trust is managed in Settings.
+    // runs without another prompt; the dialog also exposes permanent trust,
+    // while Settings remains the place to review or remove trusted origins.
     await target.bringToFront()
     const firstPress = context.tools.execute({
       callId: 'e2e-browser-press-first' as never,
@@ -371,6 +372,7 @@ describe('extension ↔ bridge e2e', () => {
     expect(await approval.locator('#approval-title').textContent()).toBe('允许执行页面操作？')
     expect(await approval.textContent()).not.toContain('网页内容可能包含')
     expect(await approval.locator('button.session-trust').count()).toBe(1)
+    expect(await approval.locator('button.origin-trust').count()).toBe(1)
     await approval.locator('button.session-trust').click()
     expect((await firstPress).isError).toBe(false)
     await approval.waitFor({ state: 'hidden', timeout: 15_000 })

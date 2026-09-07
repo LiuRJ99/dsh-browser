@@ -53,7 +53,7 @@ import { getUiLocale } from '../i18n.ts'
 import { InteractionResponseRouter } from './responses.ts'
 import {
   actionCoveredByTrustedOrigins,
-  normalizeTrustedOrigin,
+  normalizeTrustedOrigins,
 } from '../security/trusted-origins.ts'
 import { TransientEventCache } from './transient-events.ts'
 import {
@@ -71,6 +71,8 @@ import {
   sessionIdFromFrame,
 } from './session-continuity.ts'
 
+const TRUSTED_ORIGINS_VERSION = 1 as const
+
 /** User settings persisted in chrome.storage.local. */
 export interface Settings {
   bridgeUrl: string
@@ -78,6 +80,8 @@ export interface Settings {
   sharePageContent: 'ask' | 'auto' | 'off'
   /** Origins whose state-changing actions may run without another prompt. */
   trustedActionOrigins: string[]
+  /** Internal marker distinguishing post-fix settings from legacy implicit-global settings. */
+  trustedActionOriginsVersion?: 1
   /** Show an OS notification when no side panel can display an approval. */
   approvalNotifications: boolean
   /** Restore the last active browser conversation when the panel reopens. */
@@ -91,7 +95,8 @@ const SETTINGS_DEFAULTS: Settings = {
   bridgeUrl: '',
   token: '',
   sharePageContent: 'auto',
-  trustedActionOrigins: ['*'],
+  trustedActionOrigins: [],
+  trustedActionOriginsVersion: TRUSTED_ORIGINS_VERSION,
   approvalNotifications: true,
   autoResumeSession: true,
   autoFollowActiveTab: false,
@@ -171,11 +176,13 @@ const recentSession = new RecentSessionTracker({
   },
 })
 /** Ephemeral allowlist: cleared when the last side panel closes or this worker restarts. */
-const sessionTrustedActionOrigins = new Set<string>(['*'])
+const sessionTrustedActionOrigins = new Set<string>()
 /** Tool calls that can still be withdrawn by a bridge `tool.cancel` frame. */
 const activeToolCalls = new Map<string, AbortController>()
 let lastPersistedAffinity: string | undefined
 let affinityPersistence = Promise.resolve()
+/** Serialize settings writes so concurrent trust decisions cannot overwrite each other. */
+let settingsPersistence = Promise.resolve()
 /** Per-session snapshot refreshes preserve prompt ordering without cross-session cancellation. */
 const sessionSnapshotRefreshes = new Map<string, Promise<void>>()
 const activeFollowRefreshes = new Map<string, AbortController>()
@@ -220,24 +227,47 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 async function loadSettings(): Promise<Settings> {
   const stored = await chrome.storage.local.get(STORAGE_KEY)
-  const loaded = normalizeSettings({ ...SETTINGS_DEFAULTS, ...(stored[STORAGE_KEY] as Partial<Settings> | undefined) })
-  if (loaded.bridgeUrl === LEGACY_LOCAL_URL || loaded.bridgeUrl === `${LEGACY_LOCAL_URL}/`) {
-    loaded.bridgeUrl = ''
-    await chrome.storage.local.set({ [STORAGE_KEY]: loaded })
+  const raw = stored[STORAGE_KEY] as Partial<Settings> | undefined
+  const migrateLegacyGlobalTrust = raw?.trustedActionOriginsVersion !== TRUSTED_ORIGINS_VERSION
+    && hasGlobalTrustSentinel(raw?.trustedActionOrigins)
+  const loaded = normalizeSettings({
+    ...SETTINGS_DEFAULTS,
+    ...raw,
+    ...(migrateLegacyGlobalTrust
+      ? { trustedActionOrigins: normalizeTrustedOrigins(raw?.trustedActionOrigins, false) }
+      : {}),
+  })
+  const resetLegacyBridgeUrl = loaded.bridgeUrl === LEGACY_LOCAL_URL || loaded.bridgeUrl === `${LEGACY_LOCAL_URL}/`
+  if (resetLegacyBridgeUrl) loaded.bridgeUrl = ''
+  if (migrateLegacyGlobalTrust || resetLegacyBridgeUrl) {
+    // A failed repair must not block startup: `loaded` is already safe in memory,
+    // and the next worker load can retry the write.
+    try {
+      await chrome.storage.local.set({ [STORAGE_KEY]: loaded })
+    } catch {
+      // Keep the repaired in-memory settings even when storage is unavailable.
+    }
   }
   return loaded
 }
 
-async function persistSettings(next: Partial<Settings>): Promise<void> {
-  settings = normalizeSettings({ ...settings, ...next })
-  await chrome.storage.local.set({ [STORAGE_KEY]: settings })
+function hasGlobalTrustSentinel(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) =>
+    typeof entry === 'string' && (entry.trim() === '*' || entry.trim() === '<all_urls>'))
+}
+
+function persistSettings(next: Partial<Settings>): Promise<void> {
+  const write = settingsPersistence.then(async () => {
+    const nextSettings = normalizeSettings({ ...settings, ...next })
+    await chrome.storage.local.set({ [STORAGE_KEY]: nextSettings })
+    settings = nextSettings
+  })
+  settingsPersistence = write.catch(() => {})
+  return write
 }
 
 function normalizeSettings(candidate: Settings): Settings {
-  const normalized = Array.isArray(candidate.trustedActionOrigins)
-    ? [...new Set(candidate.trustedActionOrigins.map(normalizeTrustedOrigin).filter((entry): entry is string => entry !== undefined))].sort()
-    : []
-  const trusted = normalized.includes('*') ? normalized : ['*', ...normalized]
+  const trusted = normalizeTrustedOrigins(candidate.trustedActionOrigins)
   const sharePageContent = candidate.sharePageContent === 'auto' || candidate.sharePageContent === 'off'
     ? candidate.sharePageContent
     : candidate.sharePageContent === 'ask' ? 'ask' : 'auto'
@@ -245,6 +275,7 @@ function normalizeSettings(candidate: Settings): Settings {
     ...candidate,
     sharePageContent,
     trustedActionOrigins: trusted,
+    trustedActionOriginsVersion: TRUSTED_ORIGINS_VERSION,
     approvalNotifications: candidate.approvalNotifications !== false,
     autoResumeSession: candidate.autoResumeSession !== false,
     autoFollowActiveTab: candidate.autoFollowActiveTab === true,
@@ -848,9 +879,7 @@ async function authorizeToolCall(
     sessionTrustedActionOrigins.add(prompt.origins[0]!)
     return 'approved'
   }
-  // Retain wire compatibility with panels from the previous build. The new UI
-  // manages permanent trust explicitly in Settings instead of offering it in
-  // the action dialog.
+  // Permanent trust is opt-in and only applies to one stable origin at a time.
   if (decision === 'trust-origin' && prompt.kind === 'action' && prompt.canTrust && prompt.origins.length === 1) {
     await persistSettings({ trustedActionOrigins: [...settings.trustedActionOrigins, prompt.origins[0]!] })
     return 'approved'

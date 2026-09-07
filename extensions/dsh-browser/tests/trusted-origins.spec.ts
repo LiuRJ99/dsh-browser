@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   actionCoveredByTrustedOrigins,
   normalizeTrustedOrigin,
+  normalizeTrustedOrigins,
   originMatchesTrusted,
 } from '../src/security/trusted-origins.ts'
 import type { ApprovalPrompt } from '../src/security/approval.ts'
@@ -37,12 +38,25 @@ describe('normalizeTrustedOrigin', () => {
     expect(normalizeTrustedOrigin('https://user:pass@*.example.com')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://*.co.uk')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://*.github.io')).toBeUndefined()
+    expect(normalizeTrustedOrigin('<all_urls>')).toBeUndefined()
   })
 
   it('allows registrable and narrower wildcard roots', () => {
     expect(normalizeTrustedOrigin('https://*.example.co.uk')).toBe('https://*.example.co.uk')
     expect(normalizeTrustedOrigin('https://*.user.github.io')).toBe('https://*.user.github.io')
     expect(normalizeTrustedOrigin('https://*.api.example.com')).toBe('https://*.api.example.com')
+  })
+})
+
+describe('normalizeTrustedOrigins', () => {
+  it('deduplicates and canonicalizes entries without adding a global wildcard', () => {
+    expect(normalizeTrustedOrigins([' https://Example.com/path ', 'https://example.com', 'not valid'])).toEqual(['https://example.com'])
+    expect(normalizeTrustedOrigins([])).toEqual([])
+  })
+
+  it('retains an explicitly supplied global wildcard but drops legacy aliases', () => {
+    expect(normalizeTrustedOrigins(['*', '<all_urls>'])).toEqual(['*'])
+    expect(normalizeTrustedOrigins(['*'], false)).toEqual([])
   })
 })
 
@@ -59,6 +73,12 @@ describe('originMatchesTrusted', () => {
     expect(originMatchesTrusted('http://api.example.com', trusted)).toBe(false)
     expect(originMatchesTrusted('https://api.example.com:8443', trusted)).toBe(false)
     expect(originMatchesTrusted('https://secure.example.net:8443', trusted)).toBe(true)
+  })
+
+  it('keeps exact origins exact and rejects non-canonical entries', () => {
+    expect(originMatchesTrusted('https://example.com', ['https://example.com'])).toBe(true)
+    expect(originMatchesTrusted('https://api.example.com', ['https://example.com'])).toBe(false)
+    expect(originMatchesTrusted('https://example.com', ['https://example.com/path'])).toBe(false)
   })
 })
 
@@ -91,5 +111,11 @@ describe('actionCoveredByTrustedOrigins', () => {
       origins: ['https://app.example.com', 'https://bank.example.net'],
       canTrust: false,
     }), trusted)).toBe(false)
+  })
+
+  it('uses global trust only when the wildcard is explicitly configured', () => {
+    expect(actionCoveredByTrustedOrigins(action({ origins: ['https://other.example'] }), [])).toBe(false)
+    expect(actionCoveredByTrustedOrigins(action({ origins: ['https://other.example'] }), ['<all_urls>'])).toBe(false)
+    expect(actionCoveredByTrustedOrigins(action({ origins: ['https://other.example'] }), ['*'])).toBe(true)
   })
 })
