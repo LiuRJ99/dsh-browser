@@ -100,15 +100,15 @@ describe('dispatchToolCall', () => {
     }, { documentId: 'document-7' })
   })
 
-  it('does not attempt injection on Chrome internal pages', async () => {
+  it('returns protected-page metadata without attempting content-script injection', async () => {
     const chromeMock = mockChrome({
       tab: { id: 8, url: 'chrome://extensions' },
       responses: [new Error('no receiver')],
     })
 
     await expect(dispatchToolCall(CALL, 'auto')).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'content-unavailable', message: expect.stringContaining('http or https') },
+      ok: true,
+      result: { text: expect.stringContaining('Tab ID: 8') },
     })
     expect(chromeMock.executeScript).not.toHaveBeenCalled()
   })

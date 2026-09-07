@@ -104,6 +104,13 @@ describe('approvalPromptForCall', () => {
     expect(prompt?.summary).not.toContain(absolutePath)
   })
 
+  it('treats browser_open_tab as destination-scoped and keeps eval high-risk', () => {
+    const open = approvalPromptForCall(call('browser_open_tab', { url: 'https://new.example/path' }), 'auto', [], 'en')
+    expect(open).toMatchObject({ kind: 'action', origins: ['https://new.example'], canTrust: true })
+    const evalPrompt = approvalPromptForCall(call('browser_eval', { expression: 'document.title' }), 'auto', FRAMES, 'en')
+    expect(evalPrompt).toMatchObject({ kind: 'action', canTrust: false })
+  })
+
   it('renders approval summaries in English for non-Chinese browsers', () => {
     expect(approvalPromptForCall(call('browser_type', {
       index: 3,

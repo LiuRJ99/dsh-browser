@@ -139,7 +139,11 @@ describe('runEval', () => {
     commandResult = { result: { value: 'hello-page', type: 'string' } }
     const answer = await runEval(1, { expression: 'document.title' })
     expect(answer.ok).toBe(true)
-    if (answer.ok) expect((answer.result as { text: string }).text).toBe('hello-page')
+    if (answer.ok) {
+      const text = (answer.result as { text: string }).text
+      expect(text).toContain('hello-page')
+      expect(text).toContain('UNTRUSTED_PAGE_CONTENT')
+    }
     expect(lastCommand?.method).toBe('Runtime.evaluate')
     expect(lastCommand?.params.returnByValue).toBe(true)
   })

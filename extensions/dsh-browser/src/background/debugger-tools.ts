@@ -16,6 +16,7 @@
  */
 
 import type { ToolAnswer } from './tools.ts'
+import { wrapUntrustedContent } from '../security/untrusted.ts'
 
 /** chrome.debugger is only typed when the "debugger" permission is present. */
 type DebuggerApi = typeof chrome.debugger
@@ -369,7 +370,7 @@ export async function runNetworkCapture(tabId: number, args: Record<string, unkn
         : `${total} response(s) observed but none had a readable body${urlPattern !== undefined ? ` matching "${urlPattern}"` : ''}.`)
     }
     const lines = filtered.map((c) => `${c.status ?? '-'} ${c.url}\n${c.body}`).join('\n---\n')
-    return textAnswer(lines)
+    return textAnswer(wrapUntrustedContent(lines, 1_000_000))
   } finally {
     dbg.onEvent.removeListener(events)
     detachFromTab(tabId)
@@ -383,7 +384,7 @@ export async function runListTabs(): Promise<ToolAnswer> {
     const lines = tabs
       .filter((tab) => tab.id !== undefined)
       .map((tab) => `${tab.id} | ${tab.title ?? '(untitled)'} | ${tab.url ?? ''}`)
-    return textAnswer(lines.length === 0 ? '(No open tabs.)' : lines.join('\n'))
+    return textAnswer(wrapUntrustedContent(lines.length === 0 ? '(No open tabs.)' : lines.join('\n'), 1_000_000))
   } catch (error) {
     return unavailable(`Could not list tabs: ${error instanceof Error ? error.message : String(error)}`)
   }
@@ -412,7 +413,7 @@ export async function runEval(tabId: number, args: Record<string, unknown>): Pro
     const rendered = typeof value === 'string'
       ? value
       : value === undefined ? String(r.result?.description ?? 'undefined') : JSON.stringify(value) ?? String(value)
-    return textAnswer(rendered)
+    return textAnswer(wrapUntrustedContent(rendered, 1_000_000))
   } catch (error) {
     return unavailable(`Evaluation failed: ${error instanceof Error ? error.message : String(error)}`)
   } finally {

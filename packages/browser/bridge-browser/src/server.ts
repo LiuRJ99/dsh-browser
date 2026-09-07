@@ -345,6 +345,9 @@ export class BridgeServer {
       } catch (error: unknown) {
         if (!abort.signal.aborted && ws.readyState === WebSocket.OPEN) {
           sendFrame(ws, { t: 'error', code: 'stream-failed', message: String(error) })
+          // An authenticated socket without its event stream is unusable. Close
+          // the generation so the extension can rebuild its followers.
+          ws.close(1011, 'event stream failed')
         }
       }
     })()

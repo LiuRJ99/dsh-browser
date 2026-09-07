@@ -10,7 +10,9 @@
     "build": "pnpm --filter @yuxianglin/dsh-bridge-browser run build && pnpm --filter dsh-browser-extension run build",
     "start": "dsh web",
     "test": "pnpm --filter @yuxianglin/dsh-bridge-browser run test && pnpm --filter dsh-browser-extension run test",
-    "typecheck": "pnpm --filter @yuxianglin/dsh-bridge-browser run typecheck && pnpm --filter dsh-browser-extension run typecheck"
+    "typecheck": "pnpm --filter @yuxianglin/dsh-bridge-browser run typecheck && pnpm --filter dsh-browser-extension run typecheck",
+    "check:runtime": "node scripts/check-runtime.mjs",
+    "test:smoke": "node scripts/smoke-runtime.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.2-rc.1"

@@ -88,6 +88,11 @@ describe('eventsFromRecords', () => {
     })
   })
 
+  it('fails closed on malformed explicit wire envelopes', () => {
+    expect(() => eventsFromRecords([{ type: 'event' }])).toThrow(/malformed/)
+    expect(() => eventsFromRecords([{ type: 'chunks', event: {} }])).toThrow(/malformed/)
+  })
+
   it('handles bare events from mock/legacy inputs', () => {
     const bareRecords = [
       {

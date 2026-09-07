@@ -261,11 +261,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     await purgeSessionFiles(deps, sessionId)
   }
 
+  const extensionSessionIds = new Set<string>()
   let eventClientId: string | undefined
   const pendingEventIds = new Set<string>()
   const server = new BridgeServer({
     token: tokenRes.token,
-    rpcHandler: (method, payload, signal) => dispatchBrowserRpc(gateway, method, payload, signal),
+    rpcHandler: async (method, payload, signal) => {
+      const result = await dispatchBrowserRpc(gateway, method, payload, signal)
+      if (result.ok && (method === 'session.create' || method === 'session.prompt')) {
+        const payloadSessionId = isRecord(payload) && typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+        const value = isRecord(result.value) && typeof result.value.sessionId === 'string' ? result.value.sessionId : undefined
+        if (payloadSessionId !== undefined) extensionSessionIds.add(payloadSessionId)
+        if (value !== undefined) extensionSessionIds.add(value)
+      }
+      return result
+    },
     openEvents: (signal) => openBridgeEvents(baseGateway, signal, {
       onReady: (clientId) => { eventClientId = clientId },
       onPending: (eventId) => { pendingEventIds.add(eventId) },
@@ -274,7 +284,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         eventClientId = undefined
         pendingEventIds.clear()
       },
-    }),
+    }, extensionSessionIds),
     respondEvent: (rpcId, result) => {
       if (eventClientId === undefined || !pendingEventIds.has(rpcId)) {
         return Promise.resolve({ accepted: false, reason: 'not-pending' })
@@ -384,19 +394,22 @@ function openBridgeEvents(
   gateway: BrowserGateway,
   signal: AbortSignal,
   callbacks: EventCallbacks,
+  extensionSessionIds: Set<string>,
 ): AsyncIterable<BridgeEventFrame> {
-  return bridgeEventIterator(gateway, signal, callbacks)
+  return bridgeEventIterator(gateway, signal, callbacks, extensionSessionIds)
 }
 
 async function* bridgeEventIterator(
   gateway: BrowserGateway,
   signal: AbortSignal,
   callbacks: EventCallbacks,
+  extensionSessionIds: Set<string>,
 ): AsyncGenerator<BridgeEventFrame> {
   const queue = new BridgeEventQueue()
   const followControllers = new Map<string, AbortController>()
   const followTasks = new Set<Promise<void>>()
   const pendingQuestions = new Map<string, string>()
+  let remoteClientId: string | undefined
 
   const startFollow = (sessionId: string): void => {
     if (sessionId === '' || followControllers.has(sessionId)) return
@@ -438,6 +451,7 @@ async function* bridgeEventIterator(
         if (frame === undefined) continue
         switch (frame.type) {
           case 'ready':
+            remoteClientId = frame.clientId
             callbacks.onReady(frame.clientId)
             break
           case 'waterfall':
@@ -445,6 +459,12 @@ async function* bridgeEventIterator(
               const sessionId = frame.agentId
               const questions = isRecord(frame.request) ? frame.request.questions : undefined
               if (sessionId !== '' && Array.isArray(questions)) {
+                if (!extensionSessionIds.has(sessionId)) {
+                  if (remoteClientId !== undefined) {
+                    void submitRemoteEventNext(gateway, remoteClientId, frame.eventId, signal).catch(() => {})
+                  }
+                  break
+                }
                 pendingQuestions.set(frame.eventId, sessionId)
                 callbacks.onPending(frame.eventId)
                 queue.push({
@@ -497,6 +517,17 @@ async function* bridgeEventIterator(
     await Promise.allSettled([eventTask, listTask, ...followTasks])
     callbacks.onClosed()
   }
+}
+
+/** Let an unowned Host waterfall continue to its native answerer. */
+async function submitRemoteEventNext(
+  gateway: BrowserGateway,
+  clientId: string,
+  eventId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await gateway.respondEvent(clientId, eventId, { kind: 'next' }, signal)
+  if (!response.ok) throw new Error(response.error.message)
 }
 
 /** Submit one panel answer to the target Gateway-owned event continuation. */

@@ -23,12 +23,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function emit(tabId: number, frameId: number, documentId: string): void {
+function emit(tabId: number, frameId: number, documentId: string, url?: string): void {
   for (const listener of listeners) {
     listener({ type: 'DSH_CONTENT_READY' }, {
       tab: { id: tabId },
       frameId,
       documentId,
+      ...(url === undefined ? {} : { url }),
     } as chrome.runtime.MessageSender)
   }
 }
@@ -48,6 +49,18 @@ describe('navigation readiness', () => {
     emit(7, 2, 'new-document')
     await expect(wait.ready).resolves.toBe(true)
     expect(listeners.size).toBe(0)
+  })
+
+  it('ignores an initial about:blank readiness without a baseline document', async () => {
+    const wait = waitForNextDocumentReady(7, 0, undefined)
+    emit(7, 0, 'blank-document', 'about:blank')
+    await Promise.resolve()
+    let resolved = false
+    void wait.ready.then(() => { resolved = true })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+    emit(7, 0, 'destination-document', 'https://example.com/path')
+    await expect(wait.ready).resolves.toBe(true)
   })
 
   it('cleans up when cancelled or timed out', async () => {

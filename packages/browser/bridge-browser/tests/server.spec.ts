@@ -740,7 +740,7 @@ describe('BridgeServer', () => {
     ws.close()
   })
 
-  it('emits a stream-failed error frame when the event stream throws', async () => {
+  it('emits a stream-failed error frame and closes when the event stream throws', async () => {
     const failingEvents: AsyncIterable<BridgeEventFrame> = {
       async *[Symbol.asyncIterator]() {
         yield { rpcId: 'f1', method: 'session/subscribed', payload: { sessionId: 's1' } }
@@ -749,11 +749,12 @@ describe('BridgeServer', () => {
     }
     const h = await startBridge({ openEvents: () => failingEvents })
     harnesses.push(h)
-    const { ws, frames } = await connect(h.url)
+    const { ws, frames, done } = await connect(h.url)
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'error' && f.code === 'stream-failed'))
     expect(frames.find((f) => f.t === 'error')).toMatchObject({ t: 'error', code: 'stream-failed' })
-    ws.close()
+    await done
+    expect(ws.readyState).toBe(WebSocket.CLOSED)
   })
 
   it('stops pumping events once the socket closes mid-stream', async () => {

@@ -42,7 +42,15 @@ import type { ServerFrame } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts
 import { BRIDGE_CONFIG_PATH, BRIDGE_PATH } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import { BridgeClient, type BridgeState } from './bridge.ts'
 import { createRpc } from './rpc.ts'
-import { dispatchToolCall, resetTabSnapshot, type ToolAnswer, type ToolCall } from './tools.ts'
+import {
+  dispatchOpenTab,
+  dispatchToolCall,
+  isTabManagementTool,
+  resetTabSnapshot,
+  type TabManagementContext,
+  type ToolAnswer,
+  type ToolCall,
+} from './tools.ts'
 import {
   isApprovalDecision,
   type ApprovalAuthorization,
@@ -852,6 +860,69 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
   return affinityFailure('handoff')
 }
 
+/** Pick a window for browser_open_tab without changing the current session target. */
+async function resolveOpenTabWindow(sessionId?: string): Promise<{ windowId: number } | ToolAnswer> {
+  await affinityReady
+  const resolution = tabAffinity.resolveTarget(sessionId)
+  if (resolution.kind === 'handoff') return affinityFailure('handoff')
+  if (resolution.kind === 'target') {
+    try {
+      const tab = await chrome.tabs.get(resolution.tab.tabId)
+      return { windowId: tab.windowId }
+    } catch {
+      // Fall through to the focused window when the prior target is gone.
+    }
+  }
+  try {
+    const focused = await chrome.windows.getLastFocused()
+    if (focused.id !== undefined) return { windowId: focused.id }
+  } catch {
+    // Fall through to active-tab lookup.
+  }
+  const [fallback] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  if (fallback?.windowId !== undefined) return { windowId: fallback.windowId }
+  return affinityFailure('missing')
+}
+
+function removeOrphanBlankTab(previous: AffinityTab | undefined, replacementTabId: number): void {
+  if (previous === undefined || previous.tabId === replacementTabId || previous.url !== 'about:blank') return
+  if (tabAffinity.sessionIdsForTab(previous.tabId).length !== 0) return
+  if (typeof chrome?.tabs?.remove === 'function') chrome.tabs.remove(previous.tabId).catch(() => {})
+}
+
+/** Attach one model-selected tab to the calling session without activating it. */
+async function followSelectedTab(tab: chrome.tabs.Tab, sessionId?: string): Promise<void> {
+  const summary = summarizeTab(tab)
+  if (summary === null) throw new Error('The selected tab is protected and cannot be followed.')
+  const sid = sessionId ?? tabAffinity.focusedSession()
+  if (sid !== undefined && sid !== null && sid.trim() !== '') {
+    const previous = tabAffinity.attachSessionTab(sid, summary)
+    removeOrphanBlankTab(previous, summary.tabId)
+  } else {
+    tabAffinity.rebindActive(summary)
+  }
+  resetTabSnapshot(summary.tabId)
+  persistTabAffinity()
+  broadcastTabAffinity()
+}
+
+/** Commit a newly opened tab to the current session, preserving dedicated-tab isolation. */
+function bindOpenedTab(tab: chrome.tabs.Tab, sessionId?: string): boolean {
+  const summary = summarizeTab(tab)
+  if (summary === null) return false
+  const sid = sessionId ?? tabAffinity.focusedSession()
+  if (sid !== undefined && sid !== null && sid.trim() !== '') {
+    const previous = tabAffinity.attachSessionTab(sid, summary)
+    removeOrphanBlankTab(previous, summary.tabId)
+  } else {
+    tabAffinity.rebindActive(summary)
+  }
+  resetTabSnapshot(summary.tabId)
+  persistTabAffinity()
+  broadcastTabAffinity()
+  return true
+}
+
 async function authorizeToolCall(
   prompt: ApprovalPrompt,
   signal: AbortSignal,
@@ -991,7 +1062,7 @@ async function pushBudgetToControlledTab(negotiated: BridgeCaps): Promise<void> 
   }
 }
 
-async function handleAttachTabCall(call: ToolCall): Promise<ToolAnswer> {
+async function handleAttachTabCall(call: ToolCall, signal: AbortSignal): Promise<ToolAnswer> {
   const rawId = call.args.tabId
   const tabId = typeof rawId === 'number' && Number.isInteger(rawId) && rawId > 0 ? rawId : undefined
   if (tabId === undefined) {
@@ -1003,14 +1074,33 @@ async function handleAttachTabCall(call: ToolCall): Promise<ToolAnswer> {
     if (summary === null) {
       return { ok: false, error: { code: 'bad-args', message: `Tab ${tabId} is a protected internal page and cannot be attached.` } }
     }
+    if (signal.aborted) return { ok: false, error: { code: 'bridge-closed', message: 'The browser tool call was cancelled.' } }
+    const origin = typeof targetTab.url === 'string' && /^https?:\/\//i.test(targetTab.url)
+      ? new URL(targetTab.url).origin
+      : undefined
+    const authorization = await authorizeToolCall({
+      kind: 'action',
+      action: 'browser_attach_tab',
+      summary: `Attach this session to tab ${tabId} (${targetTab.title || 'Untitled'}).`,
+      origins: origin === undefined ? [] : [origin],
+      canTrust: false,
+    }, signal, targetTab.windowId, call.sessionId)
+    if (authorization !== 'approved') {
+      return { ok: false, error: { code: authorization === 'timed-out' ? 'timeout' : authorization === 'cancelled' ? 'bridge-closed' : 'action-failed', message: authorization === 'denied' ? 'The user denied the browser approval request for "browser_attach_tab".' : 'The browser approval request for "browser_attach_tab" could not be completed.' } }
+    }
+    const currentTab = await chrome.tabs.get(tabId)
+    if ((currentTab.url ?? '') !== (targetTab.url ?? '')) {
+      return { ok: false, error: { code: 'content-unavailable', message: 'The selected tab changed while approval was pending. Call browser_list_tabs again before retrying.' } }
+    }
     const sid = call.sessionId ?? tabAffinity.focusedSession() ?? 'default'
-    const previous = tabAffinity.attachSessionTab(sid, summary)
+    const previous = tabAffinity.attachSessionTab(sid, summarizeTab(currentTab) ?? summary)
     if (previous !== undefined && previous.tabId !== tabId && previous.url === 'about:blank') {
       const otherSessions = tabAffinity.sessionIdsForTab(previous.tabId)
       if (otherSessions.length === 0 && typeof chrome?.tabs?.remove === 'function') {
         chrome.tabs.remove(previous.tabId).catch(() => {})
       }
     }
+    resetTabSnapshot(tabId)
     persistTabAffinity()
     broadcastTabAffinity()
     return {
@@ -1031,87 +1121,119 @@ function routeToolCall(call: ToolCall): void {
   activeToolCalls.get(call.id)?.abort()
   const controller = new AbortController()
   activeToolCalls.set(call.id, controller)
+  let committed = false
+  const commitAction = (): void => { committed = true }
   const expiryTimer = call.expiresAt === undefined
     ? undefined
-    : setTimeout(() => { controller.abort() }, Math.max(0, call.expiresAt - Date.now()))
+    : setTimeout(() => { if (!committed) controller.abort() }, Math.max(0, call.expiresAt - Date.now()))
 
   if (call.name === 'browser_attach_tab') {
-    void handleAttachTabCall(call).then((answer) => {
+    const owner = bridge
+    void handleAttachTabCall(call, controller.signal).then((answer) => {
+      if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
       if (controller.signal.aborted) {
-        if (activeToolCalls.get(call.id) === controller) {
-          bridge?.send({
-            t: 'tool.result',
-            id: call.id,
-            ok: false,
-            error: { code: 'action-failed', message: 'Tool call was cancelled' },
-          })
-        }
+        owner.send({
+          t: 'tool.result',
+          id: call.id,
+          ok: false,
+          error: { code: 'action-failed', message: 'Tool call was cancelled' },
+        })
         return
       }
-      if (bridge === null) return
-      if (answer.ok) {
-        bridge.send({ t: 'tool.result', id: call.id, ok: true, result: answer.result })
-      } else {
-        bridge.send({ t: 'tool.result', id: call.id, ok: false, error: answer.error! })
-      }
-    })
-    return
-  }
-
-  const budget = caps === null
-    ? undefined
-    : { maxItems: caps.maxInteractiveItems, maxChars: caps.snapshotMaxChars }
-  void resolveToolTab(call.sessionId).then((target) => 'ok' in target
-    ? target
-    : dispatchToolCall(
-        call,
-        settings.sharePageContent,
-        budget,
-        (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
-        controller.signal,
-        target,
-        () => target.id !== undefined && tabAffinity.allowsTarget(target.id, call.sessionId),
-      )).then(
-    (answer) => {
-      if (controller.signal.aborted) {
-        if (activeToolCalls.get(call.id) === controller) {
-          bridge?.send({
-            t: 'tool.result',
-            id: call.id,
-            ok: false,
-            error: { code: 'action-failed', message: 'Tool call was cancelled' },
-          })
-        }
-        return
-      }
-      const socket = bridge
-      if (socket === null) return
-      if (answer.ok) {
-        socket.send({ t: 'tool.result', id: call.id, ok: true, result: answer.result })
-      } else {
-        socket.send({ t: 'tool.result', id: call.id, ok: false, error: answer.error! })
-      }
-    },
-    (error: unknown) => {
-      if (controller.signal.aborted) {
-        if (activeToolCalls.get(call.id) === controller) {
-          bridge?.send({
-            t: 'tool.result',
-            id: call.id,
-            ok: false,
-            error: { code: 'action-failed', message: 'Tool call was cancelled' },
-          })
-        }
-        return
-      }
-      bridge?.send({
+      owner.send(answer.ok
+        ? { t: 'tool.result', id: call.id, ok: true, result: answer.result }
+        : { t: 'tool.result', id: call.id, ok: false, error: answer.error! })
+    }, (error: unknown) => {
+      if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
+      owner.send({
         t: 'tool.result',
         id: call.id,
         ok: false,
         error: { code: 'internal', message: error instanceof Error ? error.message : String(error) },
       })
-    },
-  ).finally(() => {
+    }).finally(() => {
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer)
+      if (activeToolCalls.get(call.id) === controller) activeToolCalls.delete(call.id)
+    })
+    return
+  }
+
+  const owner = bridge
+  const budget = caps === null
+    ? undefined
+    : { maxItems: caps.maxInteractiveItems, maxChars: caps.snapshotMaxChars }
+  const managementDispatch = async (): Promise<ToolAnswer> => {
+    await affinityReady
+    const affinity = tabAffinity.snapshot()
+    let windowId = affinity.active?.windowId ?? affinity.controlled?.windowId
+    if (windowId === undefined) {
+      try { windowId = (await chrome.windows.getLastFocused()).id } catch { /* approval will fail closed */ }
+    }
+    const controlledTabId = call.sessionId === undefined
+      ? affinity.controlled?.tabId
+      : tabAffinity.getSessionTab(call.sessionId)?.tabId
+    const context: TabManagementContext = {
+      unrestrictedAccess: false,
+      ...(controlledTabId === undefined ? {} : { controlledTabId }),
+      followTab: (tab) => followSelectedTab(tab, call.sessionId),
+      commitAction: () => {},
+    }
+    return dispatchToolCall(
+      call,
+      settings.sharePageContent,
+      budget,
+      (prompt) => authorizeToolCall(prompt, controller.signal, windowId ?? 0, call.sessionId),
+      controller.signal,
+      undefined,
+      undefined,
+      context,
+    )
+  }
+  const operation = isTabManagementTool(call.name)
+    ? managementDispatch()
+    : call.name === 'browser_open_tab'
+      ? resolveOpenTabWindow(call.sessionId).then((target) => 'ok' in target
+        ? target
+        : dispatchOpenTab(
+            call,
+            target.windowId,
+            settings.sharePageContent,
+            budget,
+            (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
+            controller.signal,
+            (tab) => bindOpenedTab(tab, call.sessionId),
+            (tabId) => tabAffinity.allowsTarget(tabId, call.sessionId),
+            commitAction,
+          ))
+      : resolveToolTab(call.sessionId).then((target) => 'ok' in target
+        ? target
+        : dispatchToolCall(
+            call,
+            settings.sharePageContent,
+            budget,
+            (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
+            controller.signal,
+            target,
+            () => target.id !== undefined && tabAffinity.allowsTarget(target.id, call.sessionId),
+          ))
+  void operation.then((answer) => {
+    if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
+    if (controller.signal.aborted) {
+      owner.send({ t: 'tool.result', id: call.id, ok: false, error: { code: 'action-failed', message: 'Tool call was cancelled' } })
+      return
+    }
+    owner.send(answer.ok
+      ? { t: 'tool.result', id: call.id, ok: true, result: answer.result }
+      : { t: 'tool.result', id: call.id, ok: false, error: answer.error! })
+  }, (error: unknown) => {
+    if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
+    owner.send({
+      t: 'tool.result',
+      id: call.id,
+      ok: false,
+      error: { code: 'internal', message: error instanceof Error ? error.message : String(error) },
+    })
+  }).finally(() => {
     if (expiryTimer !== undefined) clearTimeout(expiryTimer)
     if (activeToolCalls.get(call.id) === controller) activeToolCalls.delete(call.id)
   })
@@ -1311,30 +1433,42 @@ chrome.runtime.onConnect.addListener((port) => {
         break
       }
       case 'settings': {
-        const settingsMsg = message as { settings: Partial<Settings> }
+        const settingsMsg = message as { id?: unknown; settings: Partial<Settings> }
+        const requestId = typeof settingsMsg.id === 'string' ? settingsMsg.id : undefined
         void settingsReady.then(async () => {
-          const previousConnection = { bridgeUrl: settings.bridgeUrl, token: settings.token }
-          await persistSettings(settingsMsg.settings)
-          if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
-          syncSelectionWatch()
-          if (panelPorts.size > 0) {
-            await startBridge()
-            broadcastStatus()
-            return
+          try {
+            const previousConnection = { bridgeUrl: settings.bridgeUrl, token: settings.token }
+            await persistSettings(settingsMsg.settings)
+            if (settings.autoFollowActiveTab) automaticallyFollowActiveTab()
+            syncSelectionWatch()
+            const connectionChanged = settings.bridgeUrl !== previousConnection.bridgeUrl
+              || settings.token !== previousConnection.token
+            if (panelPorts.size > 0) {
+              if (connectionChanged) await startBridge()
+              broadcastStatus()
+            } else if (connectionChanged) {
+              bridgeStartRevision += 1
+              bridge?.stop()
+              bridge = null
+              rpc = null
+              caps = null
+              broadcastStatus()
+              disarmBridgeKeepalive()
+            }
+            if (requestId !== undefined) {
+              try { port.postMessage({ type: 'settings.result', id: requestId, ok: true }) } catch { /* port closed */ }
+            }
+          } catch (error: unknown) {
+            if (requestId === undefined) return
+            try {
+              port.postMessage({
+                type: 'settings.result',
+                id: requestId,
+                ok: false,
+                error: { message: error instanceof Error ? error.message : String(error) },
+              })
+            } catch { /* port closed */ }
           }
-          const connectionChanged = settings.bridgeUrl !== previousConnection.bridgeUrl
-            || settings.token !== previousConnection.token
-          if (!connectionChanged) return
-          // The settings write outlived its originating panel. Do not keep a
-          // healthy socket authenticated with stale connection settings: make
-          // the next explicit panel lease start from the persisted values.
-          bridgeStartRevision += 1
-          bridge?.stop()
-          bridge = null
-          rpc = null
-          caps = null
-          broadcastStatus()
-          disarmBridgeKeepalive()
         })
         break
       }

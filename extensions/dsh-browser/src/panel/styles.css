@@ -24,8 +24,9 @@
   --security-border: #fedf89;
   --shadow: 0 10px 28px rgba(23, 32, 51, 0.08), 0 2px 6px rgba(23, 32, 51, 0.04);
   --focus-ring: 0 0 0 3px rgba(77, 107, 254, 0.18);
+  --ui-scale: 1;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-scale));
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -333,6 +334,64 @@ textarea:focus-visible {
 .tab-affinity.background .tab-affinity-actions .follow:hover {
   background: transparent;
   color: var(--blue-hover);
+}
+
+.ui-scale-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ui-scale-control > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ui-scale-control strong {
+  color: var(--ink-strong);
+  font-size: 12px;
+}
+
+.ui-scale-control small {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.ui-scale-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.ui-scale-stepper button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.ui-scale-stepper button:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.ui-scale-stepper span {
+  min-width: 42px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .settings h1 {

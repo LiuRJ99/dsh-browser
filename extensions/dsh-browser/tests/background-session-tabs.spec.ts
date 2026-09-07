@@ -655,6 +655,14 @@ describe('per-session tab management and isolation', () => {
     })
 
     await vi.waitFor(() => {
+      expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
+    })
+    const approval = panel.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; request?: { id?: string } })
+      .find((message) => message.type === 'approval.request')
+    panel.onMessage.emit({ type: 'approval.response', id: approval?.request?.id, decision: 'allow-once' })
+
+    await vi.waitFor(() => {
       const results = ws.sent
         .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean; result?: unknown })
         .filter((frame) => frame.t === 'tool.result')

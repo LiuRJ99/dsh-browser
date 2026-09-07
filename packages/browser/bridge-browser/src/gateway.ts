@@ -64,13 +64,14 @@ export interface GatewayFailure {
  */
 export function createBrowserGateway(ctx: Context): BrowserGateway {
   const sharedFetch = ctx.connection.createSharedFetchHandler('/api')
+  const historyCursors = new Map<string, number>()
   const gateway: BrowserGateway = {
     request: async (endpoint, args, signal) => {
       const split = splitEndpoint(endpoint)
       if (split === undefined) return failureResult('gateway/arguments-invalid', `invalid Remote endpoint ${JSON.stringify(endpoint)}`)
 
       if (endpoint === 'session/history') {
-        return readSessionHistory(gateway, args, signal)
+        return readSessionHistory(gateway, args, signal, historyCursors)
       }
       if (endpoint === 'workspace/list') {
         return readWorkspaceList(gateway, signal)
@@ -233,11 +234,15 @@ export function namedArguments(
 }
 
 function decodeRecord(record: unknown): SessionEvent[] {
-  if (!isRecord(record)) return []
-  if (record.type === 'event' && isRecord(record.event)) {
+  if (!isRecord(record)) throw new TypeError('session history carried an invalid record')
+  if (record.type === 'event') {
+    if (!isRecord(record.event)) throw new TypeError('session history event record is malformed')
     return [record.event as unknown as SessionEvent]
   }
-  if (record.type === 'chunks' && isRecord(record.event) && typeof record.event.type === 'string') {
+  if (record.type === 'chunks') {
+    if (!isRecord(record.event) || typeof record.event.type !== 'string') {
+      throw new TypeError('session history chunks record is malformed')
+    }
     const rawTag = record.event.type.startsWith('chunkrow/')
       ? record.event.type.slice('chunkrow/'.length)
       : record.event.type
@@ -268,6 +273,9 @@ export function historyFromFrame(frame: unknown): Record<string, unknown> | unde
   return {
     events,
     hasMore: frame.hasMore === true,
+    ...(Number.isSafeInteger(frame.cursor) && (frame.cursor as number) >= -1 && frame.cursor !== Number.MAX_SAFE_INTEGER
+      ? { cursor: frame.cursor }
+      : {}),
     ...(isRecord(frame.projections) ? { projections: frame.projections } : {}),
   }
 }
@@ -314,17 +322,91 @@ async function readSessionHistory(
   gateway: BrowserGateway,
   args: Readonly<Record<string, unknown>>,
   signal: AbortSignal,
+  cursors: Map<string, number>,
 ): Promise<GatewayResult> {
   const sessionId = args.sessionId
   if (typeof sessionId !== 'string' || sessionId === '') return failureResult('gateway/arguments-invalid', 'sessionId must be a non-empty string')
+  let beforeSeq: number | undefined
+  let maxMessages: number | undefined
+  try {
+    beforeSeq = optionalNonNegativeInteger(args, 'beforeSeq')
+    maxMessages = optionalPositiveInteger(args, 'maxMessages')
+  } catch (error: unknown) {
+    return failureResult('gateway/arguments-invalid', error instanceof Error ? error.message : 'session history pagination is invalid')
+  }
+
+  if (beforeSeq !== undefined) {
+    let throughSeq = cursors.get(sessionId)
+    if (throughSeq === undefined) {
+      const snapshot = await firstStreamFrame(gateway, 'session/follow', {
+        request: { address: { kind: 'session', sessionId: SessionId(sessionId) } },
+      }, signal)
+      if (!snapshot.ok) return snapshot
+      const parsed = historyFromFrame(snapshot.value)
+      const cursor = isRecord(parsed) && typeof parsed.cursor === 'number' ? parsed.cursor : undefined
+      if (cursor === undefined || !Number.isSafeInteger(cursor) || cursor < -1 || cursor === Number.MAX_SAFE_INTEGER) {
+        return failureResult('gateway/result-invalid', 'session/follow did not return a usable history cursor')
+      }
+      throughSeq = cursor
+      cursors.set(sessionId, cursor)
+    }
+    const page = await gateway.request('session/page', {
+      request: {
+        address: { kind: 'session', sessionId: SessionId(sessionId) },
+        throughSeq,
+        beforeSeq,
+        ...(maxMessages === undefined ? {} : { maxMessages }),
+      },
+    }, signal)
+    if (!page.ok) return page
+    const history = historyFromPage(page.value)
+    return history === undefined
+      ? failureResult('gateway/result-invalid', 'session/page returned a malformed history page')
+      : { ok: true, value: history }
+  }
+
   const frame = await firstStreamFrame(gateway, 'session/follow', {
-    request: { address: { kind: 'session', sessionId: SessionId(sessionId) } },
+    request: {
+      address: { kind: 'session', sessionId: SessionId(sessionId) },
+      ...(maxMessages === undefined ? {} : { maxMessages }),
+    },
   }, signal)
   if (!frame.ok) return frame
   const history = historyFromFrame(frame.value)
-  return history === undefined
-    ? failureResult('gateway/result-invalid', 'session/follow did not return a snapshot')
-    : { ok: true, value: history }
+  if (history === undefined) return failureResult('gateway/result-invalid', 'session/follow did not return a snapshot')
+  const cursor = isRecord(history) && typeof history.cursor === 'number' ? history.cursor : undefined
+  if (cursor !== undefined && Number.isSafeInteger(cursor) && cursor >= -1 && cursor !== Number.MAX_SAFE_INTEGER) {
+    cursors.set(sessionId, cursor)
+  }
+  return { ok: true, value: history }
+}
+
+function optionalNonNegativeInteger(payload: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  if (!(key in payload) || payload[key] === undefined) return undefined
+  const value = payload[key]
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || Object.is(value, -0)) {
+    throw new TypeError(`${key} must be a non-negative safe integer`)
+  }
+  return value as number
+}
+
+function optionalPositiveInteger(payload: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  if (!(key in payload) || payload[key] === undefined) return undefined
+  const value = payload[key]
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new TypeError(`${key} must be a positive safe integer`)
+  }
+  return value as number
+}
+
+function historyFromPage(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value) || !Array.isArray(value.records) || typeof value.hasMore !== 'boolean') return undefined
+  const events = eventsFromRecords(value.records)
+  return {
+    events,
+    hasMore: value.hasMore,
+    ...(isRecord(value.projections) ? { projections: value.projections } : {}),
+  }
 }
 
 async function readWorkspaceList(gateway: BrowserGateway, signal: AbortSignal): Promise<GatewayResult> {

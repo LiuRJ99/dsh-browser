@@ -335,9 +335,10 @@ describe('panel protocol', () => {
       onDisconnect: { addListener: vi.fn() },
     }
     const secondPost = vi.fn()
+    let secondMessage: ((message: unknown) => void) | undefined
     const second = {
       postMessage: secondPost,
-      onMessage: { addListener: vi.fn() },
+      onMessage: { addListener: vi.fn((listener: (message: unknown) => void) => { secondMessage = listener }) },
       onDisconnect: { addListener: vi.fn() },
     }
     const connect = vi.fn()
@@ -348,11 +349,9 @@ describe('panel protocol', () => {
 
     const sent = api.updateSettings({ bridgeUrl: 'ws://127.0.0.1:3080' })
     await vi.advanceTimersByTimeAsync(150)
+    const message = secondPost.mock.calls[0]?.[0] as { type?: string; id?: string; settings?: unknown }
+    expect(message).toMatchObject({ type: 'settings', settings: { bridgeUrl: 'ws://127.0.0.1:3080' } })
+    secondMessage?.({ type: 'settings.result', id: message.id, ok: true })
     await expect(sent).resolves.toBeUndefined()
-
-    expect(secondPost).toHaveBeenCalledWith({
-      type: 'settings',
-      settings: { bridgeUrl: 'ws://127.0.0.1:3080' },
-    })
   })
 })

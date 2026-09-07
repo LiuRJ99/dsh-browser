@@ -37,6 +37,7 @@ import {
   splitSelectionMessage,
 } from './selection.ts'
 import { approvalReadyForSession, approvalSessionToFocus } from './approvals.ts'
+import { applyUiScale, formatUiScale, loadUiScale, saveUiScale, stepUiScale, uiScaleAtLimit } from './ui-scale.ts'
 import {
   browserTimeZone,
   draftImageDataUrl,
@@ -551,6 +552,7 @@ export function App(): React.JSX.Element {
   const [working, setWorking] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [uiScale, setUiScale] = useState(1)
   const [approvalQueue, setApprovalQueue] = useState<ApprovalRequest[]>([])
   const [tabAffinity, setTabAffinity] = useState<TabAffinityState | null>(null)
   const [trustedOriginInput, setTrustedOriginInput] = useState('')
@@ -632,6 +634,20 @@ export function App(): React.JSX.Element {
       : removePendingQuestion(current, target)
     questionSubmissionsRef.current = updated
     setQuestionSubmissions(updated)
+  }
+
+  useEffect(() => {
+    void loadUiScale().then((scale) => {
+      setUiScale(scale)
+      applyUiScale(scale)
+    })
+  }, [])
+
+  function changeUiScale(direction: 1 | -1): void {
+    const next = stepUiScale(uiScale, direction)
+    setUiScale(next)
+    applyUiScale(next)
+    saveUiScale(next)
   }
 
   // Settings: seed from storage, then let the panel own the form.
@@ -1579,6 +1595,17 @@ export function App(): React.JSX.Element {
               <option value="off">{copy.settings.sharingOff}</option>
             </select>
           </label>
+        </div>
+        <div className="settings-panel ui-scale-control">
+          <div>
+            <strong>Panel text size</strong>
+            <small>Adjust the browser assistant text without changing bridge behavior.</small>
+          </div>
+          <div className="ui-scale-stepper">
+            <button type="button" onClick={() => changeUiScale(-1)} disabled={uiScaleAtLimit(uiScale, -1)} aria-label="Decrease text size">−</button>
+            <span>{formatUiScale(uiScale)}</span>
+            <button type="button" onClick={() => changeUiScale(1)} disabled={uiScaleAtLimit(uiScale, 1)} aria-label="Increase text size">+</button>
+          </div>
         </div>
         <div className="settings-panel preference-toggles">
           <label className="setting-toggle">
