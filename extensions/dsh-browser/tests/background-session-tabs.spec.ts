@@ -83,9 +83,11 @@ function affinityStates(postMessage: ReturnType<typeof vi.fn>): Array<{
 function mockChrome(options: {
   trustedActionOrigins?: string[]
   trustedActionOriginsVersion?: 1
+  sharePageContent?: 'ask' | 'auto' | 'off'
   localSet?: (items: Record<string, unknown>) => Promise<void>
 } = {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
+  const onMessage = chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>()
   const onActivated = chromeEvent<[{ tabId: number; windowId: number }]>()
   const onRemoved = chromeEvent<[number]>()
   const onUpdated = chromeEvent<[number, chrome.tabs.TabChangeInfo, chrome.tabs.Tab]>()
@@ -109,9 +111,10 @@ function mockChrome(options: {
     onRemoved.emit(tabId)
   })
 
-  const update = vi.fn(async (tabId: number, props: { active?: boolean }) => {
+  const update = vi.fn(async (tabId: number, props: { active?: boolean; url?: string }) => {
     const existing = tabStore.get(tabId) ?? tab(tabId)
     if (props.active !== undefined) existing.active = props.active
+    if (props.url !== undefined) existing.url = props.url
     tabStore.set(tabId, existing)
     if (props.active) onActivated.emit({ tabId, windowId: 1 })
     return existing
@@ -144,7 +147,7 @@ function mockChrome(options: {
       id: 'test-extension',
       getURL: (path: string) => `chrome-extension://test/${path}`,
       onConnect,
-      onMessage: chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>(),
+      onMessage,
     },
     scripting: {
       executeScript: vi.fn(async () => []),
@@ -156,6 +159,7 @@ function mockChrome(options: {
           dshSettings: {
             bridgeUrl: 'ws://127.0.0.1:3080/ext/bridge',
             trustedActionOrigins: options.trustedActionOrigins ?? [],
+            sharePageContent: options.sharePageContent ?? 'auto',
             ...(options.trustedActionOriginsVersion === undefined
               ? {}
               : { trustedActionOriginsVersion: options.trustedActionOriginsVersion }),
@@ -200,6 +204,7 @@ function mockChrome(options: {
     query,
     sendMessage,
     onConnect,
+    onMessage,
     tabStore,
     onActivated,
     localSet,
@@ -682,5 +687,79 @@ describe('per-session tab management and isolation', () => {
     await vi.waitFor(() => {
       expect(chromeMock.sendMessage).toHaveBeenCalledWith(11, expect.objectContaining({ type: 'DSH_ACTION' }), expect.anything())
     })
+    await vi.waitFor(() => {
+      const results = ws.sent
+        .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean })
+        .filter((frame) => frame.t === 'tool.result')
+      expect(results.some((result) => result.id === 'call-subagent-snapshot' && result.ok === true)).toBe(true)
+    })
+
+    // 5. A bound-session browser_close_tab must stay in the Service Worker;
+    // content.js does not implement tab collection operations.
+    chromeMock.sendMessage.mockClear()
+    panel.postMessage.mockClear()
+    ws.receive({
+      t: 'tool.call',
+      id: 'call-close-bound',
+      name: 'browser_close_tab',
+      args: { tabId: 11 },
+      sessionId: 'subagent-session',
+      expiresAt: Date.now() + 10000,
+    })
+
+    await vi.waitFor(() => {
+      expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
+    })
+    const closeApproval = panel.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; request?: { id?: string } })
+      .find((message) => message.type === 'approval.request')
+    panel.onMessage.emit({ type: 'approval.response', id: closeApproval?.request?.id, decision: 'allow-once' })
+
+    await vi.waitFor(() => {
+      expect(chromeMock.remove).toHaveBeenCalledWith(11)
+      const results = ws.sent
+        .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean })
+        .filter((frame) => frame.t === 'tool.result')
+      expect(results.some((result) => result.id === 'call-close-bound' && result.ok === true)).toBe(true)
+    })
+    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+
+    // 6. Opening a tab after the bound target is gone also uses the
+    // Service Worker path, not resolveToolTab/content.js.
+    panel.postMessage.mockClear()
+    ws.receive({
+      t: 'tool.call',
+      id: 'call-open-bound',
+      name: 'browser_open_tab',
+      args: { url: 'https://opened.example/path' },
+      sessionId: 'subagent-session',
+      expiresAt: Date.now() + 10000,
+    })
+
+    await vi.waitFor(() => {
+      expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
+    })
+    const openApproval = panel.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; request?: { id?: string } })
+      .find((message) => message.type === 'approval.request')
+    panel.onMessage.emit({ type: 'approval.response', id: openApproval?.request?.id, decision: 'allow-once' })
+
+    await vi.waitFor(() => {
+      expect(chromeMock.update).toHaveBeenCalledWith(13, { url: 'https://opened.example/path' })
+    })
+    chromeMock.onMessage.emit(
+      { type: 'DSH_CONTENT_READY' },
+      { tab: { id: 13 }, frameId: 0, url: 'https://opened.example/path' } as chrome.runtime.MessageSender,
+      () => {},
+    )
+    await vi.waitFor(() => {
+      const results = ws.sent
+        .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean })
+        .filter((frame) => frame.t === 'tool.result')
+      expect(results.some((result) => result.id === 'call-open-bound' && result.ok === true)).toBe(true)
+    })
+    expect(chromeMock.create).toHaveBeenCalledWith({ active: true, windowId: 1 })
+    expect(chromeMock.sendMessage.mock.calls.some(([tabId, message]) =>
+      tabId === 13 && (message as { action?: string }).action === 'browser_open_tab')).toBe(false)
   })
 })

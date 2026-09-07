@@ -691,16 +691,23 @@ export async function dispatchToolCall(
   targetStillAllowed?: () => boolean,
   tabManagement: TabManagementContext = { unrestrictedAccess: false },
 ): Promise<ToolAnswer> {
-  if (call.name === 'browser_open_tab') {
-    return unavailable('browser_open_tab must be dispatched through the background open-tab path.')
-  }
   if (isCancelled(call, signal)) return cancelled()
   const effectiveBudget = budget ?? { maxItems: 60, maxChars: DEFAULT_SNAPSHOT_MAX_CHARS }
-  if (!tabManagement.unrestrictedAccess && sharePageContent === 'off' && call.name === 'browser_list_tabs') {
-    return { ok: false, error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' } }
-  }
+
+  // Tab-collection calls are background-only. Keep this guard before any
+  // page-target, frame, or content-script work so a bound session cannot make
+  // browser_close_tab/browser_follow_tab/browser_list_tabs leak into content.js.
   if (isTabManagementTool(call.name)) {
+    if (!tabManagement.unrestrictedAccess && sharePageContent === 'off' && call.name === 'browser_list_tabs') {
+      return { ok: false, error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' } }
+    }
     return dispatchTabManagementTool(call, effectiveBudget, authorize, signal, tabManagement)
+  }
+
+  // browser_open_tab has its own Service Worker path and must not be sent to
+  // content.js, which has no action implementation for creating tabs.
+  if (call.name === 'browser_open_tab') {
+    return unavailable('browser_open_tab must be dispatched through the background open-tab path.')
   }
   // Privacy boundary: with sharing off, no page content may leave the page.
   if (!tabManagement.unrestrictedAccess && sharePageContent === 'off' && PAGE_CONTENT_READS.has(call.name)) {

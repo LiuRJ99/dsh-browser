@@ -1176,7 +1176,7 @@ function routeToolCall(call: ToolCall): void {
       unrestrictedAccess: false,
       ...(controlledTabId === undefined ? {} : { controlledTabId }),
       followTab: (tab) => followSelectedTab(tab, call.sessionId),
-      commitAction: () => {},
+      commitAction,
     }
     return dispatchToolCall(
       call,
@@ -1189,54 +1189,68 @@ function routeToolCall(call: ToolCall): void {
       context,
     )
   }
-  const operation = isTabManagementTool(call.name)
-    ? managementDispatch()
-    : call.name === 'browser_open_tab'
-      ? resolveOpenTabWindow(call.sessionId).then((target) => 'ok' in target
-        ? target
-        : dispatchOpenTab(
-            call,
-            target.windowId,
-            settings.sharePageContent,
-            budget,
-            (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
-            controller.signal,
-            (tab) => bindOpenedTab(tab, call.sessionId),
-            (tabId) => tabAffinity.allowsTarget(tabId, call.sessionId),
-            commitAction,
-          ))
-      : resolveToolTab(call.sessionId).then((target) => 'ok' in target
-        ? target
-        : dispatchToolCall(
-            call,
-            settings.sharePageContent,
-            budget,
-            (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
-            controller.signal,
-            target,
-            () => target.id !== undefined && tabAffinity.allowsTarget(target.id, call.sessionId),
-          ))
-  void operation.then((answer) => {
-    if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
-    if (controller.signal.aborted) {
-      owner.send({ t: 'tool.result', id: call.id, ok: false, error: { code: 'action-failed', message: 'Tool call was cancelled' } })
-      return
-    }
-    owner.send(answer.ok
-      ? { t: 'tool.result', id: call.id, ok: true, result: answer.result }
-      : { t: 'tool.result', id: call.id, ok: false, error: answer.error! })
-  }, (error: unknown) => {
-    if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
-    owner.send({
-      t: 'tool.result',
-      id: call.id,
-      ok: false,
-      error: { code: 'internal', message: error instanceof Error ? error.message : String(error) },
+  /**
+   * Complete a background dispatch without ever resolving a page target first.
+   * Tab-collection tools are not implemented by content.js, so keep this
+   * boundary explicit rather than hiding it in a nested dispatch expression.
+   */
+  const sendResult = (operation: Promise<ToolAnswer>): void => {
+    void operation.then((answer) => {
+      if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
+      if (controller.signal.aborted) {
+        owner.send({ t: 'tool.result', id: call.id, ok: false, error: { code: 'action-failed', message: 'Tool call was cancelled' } })
+        return
+      }
+      owner.send(answer.ok
+        ? { t: 'tool.result', id: call.id, ok: true, result: answer.result }
+        : { t: 'tool.result', id: call.id, ok: false, error: answer.error! })
+    }, (error: unknown) => {
+      if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
+      owner.send({
+        t: 'tool.result',
+        id: call.id,
+        ok: false,
+        error: { code: 'internal', message: error instanceof Error ? error.message : String(error) },
+      })
+    }).finally(() => {
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer)
+      if (activeToolCalls.get(call.id) === controller) activeToolCalls.delete(call.id)
     })
-  }).finally(() => {
-    if (expiryTimer !== undefined) clearTimeout(expiryTimer)
-    if (activeToolCalls.get(call.id) === controller) activeToolCalls.delete(call.id)
-  })
+  }
+
+  // These branches intentionally precede resolveToolTab: neither operation
+  // should ever be handed to the page content script, even for bound sessions.
+  if (isTabManagementTool(call.name)) {
+    sendResult(managementDispatch())
+    return
+  }
+  if (call.name === 'browser_open_tab') {
+    sendResult(resolveOpenTabWindow(call.sessionId).then((target) => 'ok' in target
+      ? target
+      : dispatchOpenTab(
+          call,
+          target.windowId,
+          settings.sharePageContent,
+          budget,
+          (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
+          controller.signal,
+          (tab) => bindOpenedTab(tab, call.sessionId),
+          (tabId) => tabAffinity.allowsTarget(tabId, call.sessionId),
+          commitAction,
+        )))
+    return
+  }
+  sendResult(resolveToolTab(call.sessionId).then((target) => 'ok' in target
+    ? target
+    : dispatchToolCall(
+        call,
+        settings.sharePageContent,
+        budget,
+        (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
+        controller.signal,
+        target,
+        () => target.id !== undefined && tabAffinity.allowsTarget(target.id, call.sessionId),
+      )))
 }
 
 function cancelToolCall(id: string): void {
