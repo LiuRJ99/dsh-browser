@@ -1,6 +1,8 @@
 /** Shared panel/background contract for browser action approval. */
 
 export type ApprovalKind = 'read' | 'action'
+/** Session-only grants for actions whose destination cannot be represented by one origin. */
+export type AdvancedBrowserPermission = 'history'
 export type ApprovalDecision = 'deny' | 'allow-once' | 'always-allow-reads' | 'trust-session' | 'trust-origin'
 /** Background authorization result; transport failures must not masquerade as a user decision. */
 export type ApprovalAuthorization = 'approved' | 'denied' | 'unavailable' | 'timed-out' | 'cancelled'
@@ -13,6 +15,8 @@ export interface ApprovalPrompt {
   origins: string[]
   /** True only when one stable origin can safely be added to the action allowlist. */
   canTrust: boolean
+  /** Session-only permission for actions whose destination is not represented by one origin. */
+  advancedPermission?: AdvancedBrowserPermission
 }
 
 /** Correlated request delivered to every open side-panel view. */

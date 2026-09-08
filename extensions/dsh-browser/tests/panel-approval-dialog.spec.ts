@@ -52,6 +52,35 @@ describe('ApprovalDialog trusted-origin actions', () => {
     expect(onDecision).toHaveBeenCalledWith('trust-origin')
   })
 
+  it('uses the same origin trust controls for JavaScript execution', async () => {
+    const onDecision = await renderApproval({
+      ...ACTION,
+      action: 'browser_eval',
+      summary: '在页面中执行 JavaScript',
+    })
+    const button = container?.querySelector<HTMLButtonElement>('button.session-trust')
+
+    expect(button?.textContent).toBe('本次会话信任此域')
+    expect(container?.querySelector('button.advanced-trust')).toBeNull()
+    await act(async () => { button?.click() })
+    expect(onDecision).toHaveBeenCalledWith('trust-session')
+  })
+
+  it('uses the same session trust decision for unknown-destination history navigation', async () => {
+    const onDecision = await renderApproval({
+      ...ACTION,
+      action: 'browser_back',
+      canTrust: false,
+      advancedPermission: 'history',
+    })
+    const button = container?.querySelector<HTMLButtonElement>('button.session-trust')
+
+    expect(button?.textContent).toBe('本次会话允许历史导航')
+    expect(container?.querySelector('button.origin-trust')).toBeNull()
+    await act(async () => { button?.click() })
+    expect(onDecision).toHaveBeenCalledWith('trust-session')
+  })
+
   it('does not offer origin trust for reads or uncertain boundaries', async () => {
     await renderApproval({ ...ACTION, kind: 'read', canTrust: false })
     expect(container?.querySelector('button.origin-trust')).toBeNull()

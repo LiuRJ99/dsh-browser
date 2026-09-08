@@ -179,6 +179,26 @@ describe('dispatchToolCall', () => {
     ])
   })
 
+  it('rejects browser_eval for non-top-level frames until CDP contexts are mapped', async () => {
+    const chromeMock = mockChrome({
+      tab: { id: 22, url: 'https://app.example/' },
+      frames: [
+        { frameId: 0, parentFrameId: -1, documentId: 'top-doc', url: 'https://app.example/' },
+        { frameId: 4, parentFrameId: 0, documentId: 'child-doc', url: 'https://widget.example/' },
+      ],
+    })
+
+    await expect(dispatchToolCall({
+      id: 'eval-frame',
+      name: 'browser_eval',
+      args: { frame: 4, expression: '1 + 1' },
+    }, 'auto')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'bad-args', message: expect.stringContaining('top-level') },
+    })
+    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+  })
+
   it('routes an element action to the requested frame and removes routing metadata', async () => {
     const call: ToolCall = { id: 'tool-frame', name: 'browser_click', args: { frame: 8, index: 3 } }
     const chromeMock = mockChrome({

@@ -67,7 +67,7 @@ curl -sS -X POST http://127.0.0.1:3080/ext/browser-control \\
 - `/api` 载体钉在回环上的方法（`settings.*`、`credentials.*`、`host.pickDirectory`、`host.openPath`）对非回环来源**即使 token 正确也拒绝**——对 `--host 0.0.0.0` 部署的纵深防御。
 - 同一时刻仅一个活动连接，新认证连接顶替旧连接。
 - 桥是 confused-deputy 边界而非通用认证层：不要把 `dsh web --host 0.0.0.0` 暴露在不信任的网络上。
-- 抽取的页面文字会标记为模型的不可信输入。页面读取遵循扩展的询问/自动/关闭策略；状态变更工具必须经过按 origin 的侧边栏决策，没有侧边栏时失败关闭。同源后续操作可只在当前侧栏会话中临时信任；稳定 origin 可在审批框或设置中明确加入永久可信名单。
+- 抽取的页面文字会标记为模型的不可信输入。页面读取遵循扩展的询问/自动/关闭策略；普通状态变更工具和 `browser_eval` 统一经过按 origin 的侧栏信任，没有侧栏时失败关闭。历史前进/后退因目标未知使用当前会话级权限；绑定/跟随标签页沿用目标标签页的 origin 信任；`browser_close_tab` 始终重新确认。`browser_list_tabs` 只有在自动共享时免确认，每次询问会弹窗，关闭时阻断。
 
 ## 线协议
 
@@ -90,10 +90,12 @@ curl -sS -X POST http://127.0.0.1:3080/ext/browser-control \\
 | `browser_click_text` | 按可见文本/CSS 选择器点击元素，绕过编号清单（点 a11y 不可达元素）。 |
 | `browser_wait_for` | 等待某 CSS 选择器出现或页面文本包含子串（导出数据生成/加载完成）。 |
 | `browser_get_table` | 把 HTML 表格提取为 CSV 或 JSON（首行 th 作为表头）。 |
-| `browser_eval` | 在页面 DOM 执行一段 JS 并返回结果文本（兜底；按 origin 信任）。 |
+| `browser_eval` | 在顶层页面 DOM 执行一段 JS 并返回结果文本（兜底；沿用受信任 origin 策略）。 |
 | `browser_download_wait` | 等待下载完成并返回本地文件路径。 |
 | `browser_network_capture` | 抓取一段窗口内的 XHR/fetch 响应（可过滤 URL 子串），返回 JSON 行。 |
-| `browser_list_tabs` | 列出所有标签页（id / 标题 / URL）。 |
+| `browser_list_tabs` | 列出所有标签页（id / 标题 / URL）；审批跟随页面共享模式。 |
+| `browser_attach_tab` / `browser_follow_tab` | 绑定或跟随标签页；沿用目标标签页的 origin 信任。 |
+| `browser_close_tab` | 关闭标签页；始终需要重新确认。 |
 
 `browser_screenshot` / `browser_download_wait` / `browser_network_capture` / `browser_list_tabs`
 在扩展 background 层执行，不经过 content script；前两者需要 manifest 的 `debugger` / `downloads` 权限。

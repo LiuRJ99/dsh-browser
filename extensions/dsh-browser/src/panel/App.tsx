@@ -415,11 +415,18 @@ export function ApprovalDialog({
               <button className="origin-trust" onClick={() => onDecision('trust-origin')}>{copy.approval.trustOrigin}</button>
             </>
           )}
+          {request.kind === 'action' && request.advancedPermission !== undefined && (
+            <button className="session-trust" onClick={() => onDecision('trust-session')}>
+              {copy.approval.trustAdvancedSession(request.advancedPermission)}
+            </button>
+          )}
         </div>
         <small className="approval-footnote">
           {request.kind === 'read'
             ? copy.approval.readFootnote
-            : copy.approval.actionFootnote}
+            : request.advancedPermission !== undefined
+              ? copy.approval.advancedActionFootnote
+              : copy.approval.actionFootnote}
         </small>
       </section>
     </div>

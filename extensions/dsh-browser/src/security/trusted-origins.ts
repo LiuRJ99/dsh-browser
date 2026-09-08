@@ -77,6 +77,9 @@ export function actionCoveredByTrustedOrigins(
   ...trustedCollections: Iterable<string>[]
 ): boolean {
   if (prompt.kind !== 'action') return false
+  // Advanced capabilities have their own session-scoped grants. Closing a tab
+  // remains a fresh decision even when the user explicitly configured '*'.
+  if (prompt.advancedPermission !== undefined || prompt.action === 'browser_close_tab') return false
   const isGlobalTrusted = trustedCollections.some((c) => {
     if (!c) return false
     for (const t of c) {

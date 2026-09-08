@@ -36,16 +36,34 @@ describe('tab management tools', () => {
     expect(chromeMock.remove).not.toHaveBeenCalled()
   })
 
-  it('returns stable untrusted tab metadata after explicit approval', async () => {
+  it('returns stable untrusted tab metadata without prompting in automatic sharing mode', async () => {
     installChrome([tab(1), tab(2)])
+    const authorize = vi.fn(async () => 'approved' as const)
     const result = await dispatchToolCall(
       { id: 'list', name: 'browser_list_tabs', args: {} },
       'auto',
       undefined,
-      async () => 'approved',
+      authorize,
     )
     expect(result).toMatchObject({ ok: true, result: { text: expect.stringContaining('UNTRUSTED_PAGE_CONTENT') } })
     expect((result.result as { text: string }).text).toContain('"tabId": 1')
+    expect(authorize).not.toHaveBeenCalled()
+  })
+
+  it('keeps all-tab reads behind approval in ask mode', async () => {
+    installChrome([tab(1)])
+    const authorize = vi.fn(async () => 'approved' as const)
+    await dispatchToolCall(
+      { id: 'list', name: 'browser_list_tabs', args: {} },
+      'ask',
+      undefined,
+      authorize,
+    )
+    expect(authorize).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'read',
+      action: 'browser_list_tabs',
+      origins: [],
+    }))
   })
 
   it('follows without activating and closes only the requested tab', async () => {

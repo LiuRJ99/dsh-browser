@@ -1,5 +1,6 @@
 import type { BridgeState } from '../background/bridge.ts'
 import type { UiLocale } from '../i18n.ts'
+import type { AdvancedBrowserPermission } from '../security/approval.ts'
 
 export interface PanelCopy {
   documentTitle: string
@@ -16,8 +17,10 @@ export interface PanelCopy {
     alwaysAllowReads: string
     trustSession: string
     trustOrigin: string
+    trustAdvancedSession: (permission: AdvancedBrowserPermission) => string
     readFootnote: string
     actionFootnote: string
+    advancedActionFootnote: string
   }
   tool: {
     running: string
@@ -220,8 +223,12 @@ const EN: PanelCopy = {
     alwaysAllowReads: 'Always allow reads',
     trustSession: 'Trust this domain for this session',
     trustOrigin: 'Add to trusted list',
+    trustAdvancedSession: (permission) => permission === 'history'
+      ? 'Allow history navigation for this conversation'
+      : 'Allow tab switching for this conversation',
     readFootnote: 'Esc to deny · You can disable automatic reading in Settings at any time',
     actionFootnote: 'Esc to deny · Session trust ends when the side panel closes · Trusted-list entries persist · Typed content is never shown',
+    advancedActionFootnote: 'Esc to deny · This advanced permission lasts for this conversation while the side panel stays open',
   },
   tool: {
     running: 'Working on page',
@@ -436,8 +443,12 @@ const ZH: PanelCopy = {
     alwaysAllowReads: '始终允许读取',
     trustSession: '本次会话信任此域',
     trustOrigin: '加入信任名单',
+    trustAdvancedSession: (permission) => permission === 'history'
+      ? '本次会话允许历史导航'
+      : '本次会话允许标签页切换',
     readFootnote: 'Esc 拒绝 · 可随时在设置中关闭自动读取',
     actionFootnote: 'Esc 拒绝 · 关闭侧栏后会话信任失效 · 信任名单会永久保留 · 输入内容不会显示',
+    advancedActionFootnote: 'Esc 拒绝 · 高级权限仅在当前会话且侧栏保持打开时有效',
   },
   tool: {
     running: '正在操作页面',

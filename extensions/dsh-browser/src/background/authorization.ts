@@ -2,7 +2,7 @@
 
 import type { ToolCall } from './tools.ts'
 import type { TabFrame } from './frames.ts'
-import type { ApprovalPrompt } from '../security/approval.ts'
+import type { ApprovalPrompt, AdvancedBrowserPermission } from '../security/approval.ts'
 import { getUiLocale, type UiLocale } from '../i18n.ts'
 
 const PAGE_READS = new Set([
@@ -68,10 +68,11 @@ export function approvalPromptForCall(
   const frameId = requestedFrame(call.args)
   const target = frames.find((frame) => frame.frameId === frameId) ?? frames.find((frame) => frame.frameId === 0)
   const origins = uniqueOrigins(target === undefined ? [] : [target], frames)
-  let canTrust = origins.length === 1
-    && call.name !== 'browser_back'
-    && call.name !== 'browser_forward'
-    && call.name !== 'browser_eval'
+  const advancedPermission = advancedPermissionForAction(call.name)
+  // JavaScript execution follows the same origin trust as other page actions;
+  // only history navigation has an unknown destination and needs a separate
+  // session capability.
+  let canTrust = origins.length === 1 && advancedPermission === undefined
   if (call.name === 'browser_navigate' || call.name === 'browser_open_tab') {
     const destination = originFromUrl(typeof call.args.url === 'string' ? call.args.url : '')
     if (destination !== undefined && !origins.includes(destination)) origins.push(destination)
@@ -87,7 +88,13 @@ export function approvalPromptForCall(
     // Cross-origin/invalid navigation and unknown history destinations always
     // require a fresh decision; they must never expand trust implicitly.
     canTrust,
+    ...(advancedPermission === undefined ? {} : { advancedPermission }),
   }
+}
+
+function advancedPermissionForAction(action: string): AdvancedBrowserPermission | undefined {
+  if (action === 'browser_back' || action === 'browser_forward') return 'history'
+  return undefined
 }
 
 function requestedFrame(args: Record<string, unknown>): number {

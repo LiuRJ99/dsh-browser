@@ -66,7 +66,7 @@ The route intentionally excludes binary/local-file tools (`browser_upload_file`,
 - Gateway methods the `/api` carrier pins to loopback (`settings.*`, `credentials.*`, `host.pickDirectory`, `host.openPath`) are refused for non-loopback remotes **even with a valid token** — defense in depth for `--host 0.0.0.0` deployments.
 - One active connection at a time; a new authenticated socket replaces the previous one.
 - The bridge is a confused-deputy boundary, not a general auth layer: never expose `dsh web --host 0.0.0.0` on untrusted networks.
-- Extracted page text is marked as untrusted model input. Page reads honor the extension's ask/auto/off policy, while state-changing tools require an origin-scoped side-panel decision and fail closed without a panel. Same-origin repetition can be trusted for the current panel session; a stable origin can be explicitly added to the permanent trusted list from the approval dialog or Settings.
+- Extracted page text is marked as untrusted model input. Page reads honor the extension's ask/auto/off policy, while ordinary state-changing tools and `browser_eval` use the same origin-scoped side-panel trust and fail closed without a panel. History navigation remains session-only because its destination is unknown; tab attach/follow use the target tab's origin trust; `browser_close_tab` remains a fresh approval. `browser_list_tabs` is silent only in `auto`, asks in `ask`, and is blocked in `off`.
 
 ## Wire protocol
 
@@ -85,6 +85,11 @@ Each `respond` carries a globally unique transport id as well as the host intera
 | `browser_click` / `browser_type` / `browser_press` | Operate inventory items by stable index. |
 | `browser_scroll` / `browser_navigate` / `browser_back` / `browser_forward` / `browser_reload` | Page movement. |
 | `browser_get_text` / `browser_wait` | Read regions / settle detection. |
+| `browser_eval` | Evaluate JavaScript in the top-level page; follows the trusted-origin policy. |
+| `browser_wait_for` / `browser_get_table` | Wait for a selector/text condition / extract a table. |
+| `browser_screenshot` / `browser_network_capture` | Capture page output through the extension debugger path. |
+| `browser_download_wait` / `browser_list_tabs` | Wait for a download / list all tabs; tab listing follows the page-sharing mode. |
+| `browser_follow_tab` / `browser_close_tab` / `browser_attach_tab` | Manage controlled tabs; follow/attach use the target tab's trusted origin, while close always asks. |
 
 ## Model Experience
 

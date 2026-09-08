@@ -454,7 +454,10 @@ async function dispatchOnce(
   if (call.name === 'browser_download_wait') return runDownloadWait(tabId, call.args)
   if (call.name === 'browser_network_capture') return runNetworkCapture(tabId, call.args)
   if (call.name === 'browser_list_tabs') return runListTabs()
-  if (call.name === 'browser_eval') return runEval(tabId, call.args)
+  if (call.name === 'browser_eval') {
+    commitAction?.()
+    return runEval(tabId, call.args)
+  }
 
   const frameId = requestedFrame(call.args)
   if (frameId < 0) return { ok: false, error: { code: 'action-failed', message: 'frame must be a non-negative integer.' } }
@@ -573,7 +576,7 @@ function tabManagementApproval(call: ToolCall, tab?: chrome.tabs.Tab): ApprovalP
       ? (locale === 'zh' ? `跟随标签页 ${tab?.id ?? '?'}：${display}` : `Follow tab ${tab?.id ?? '?'}: ${display}`)
       : (locale === 'zh' ? `关闭标签页 ${tab?.id ?? '?'}：${display}` : `Close tab ${tab?.id ?? '?'}: ${display}`),
     origins: origin === undefined ? [] : [origin],
-    canTrust: false,
+    canTrust: call.name === 'browser_follow_tab' && origin !== undefined,
   }
 }
 
@@ -598,14 +601,20 @@ async function findTab(tabId: number): Promise<chrome.tabs.Tab | undefined> {
 
 async function dispatchTabManagementTool(
   call: ToolCall,
+  sharePageContent: 'ask' | 'auto' | 'off',
   budget: ContentBudget,
   authorize: ((prompt: ApprovalPrompt) => Promise<ApprovalAuthorization>) | undefined,
   signal: AbortSignal | undefined,
   context: TabManagementContext,
 ): Promise<ToolAnswer> {
   if (call.name === 'browser_list_tabs') {
-    const rejected = await authorizeTabManagement(tabManagementApproval(call), authorize, call, signal)
-    if (rejected !== undefined) return rejected
+    // Listing every tab is a broad read, but in automatic sharing mode it
+    // follows the same no-prompt policy as a controlled-page snapshot. Ask
+    // remains explicit, and off is rejected by dispatchToolCall before here.
+    if (sharePageContent === 'ask') {
+      const rejected = await authorizeTabManagement(tabManagementApproval(call), authorize, call, signal)
+      if (rejected !== undefined) return rejected
+    }
     const tabs = await chrome.tabs.query({})
     if (isCancelled(call, signal)) return cancelled()
     const records = tabs
@@ -701,7 +710,7 @@ export async function dispatchToolCall(
     if (!tabManagement.unrestrictedAccess && sharePageContent === 'off' && call.name === 'browser_list_tabs') {
       return { ok: false, error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' } }
     }
-    return dispatchTabManagementTool(call, effectiveBudget, authorize, signal, tabManagement)
+    return dispatchTabManagementTool(call, sharePageContent, effectiveBudget, authorize, signal, tabManagement)
   }
 
   // browser_open_tab has its own Service Worker path and must not be sent to
@@ -726,6 +735,9 @@ export async function dispatchToolCall(
   if (frameError !== undefined) return frameError
   const targetError = validateElementTarget(call, tab.id, frames)
   if (targetError !== undefined) return targetError
+  if (call.name === 'browser_eval' && requestedFrame(call.args) !== 0) {
+    return { ok: false, error: { code: 'bad-args', message: 'browser_eval currently supports only the top-level page frame.' } }
+  }
   const approval = approvalPromptForCall(call, sharePageContent, frames)
   if (approval !== undefined) {
     const authorization = authorize === undefined ? 'unavailable' : await authorize(approval)

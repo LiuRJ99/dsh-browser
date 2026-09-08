@@ -80,6 +80,14 @@ describe('approvalPromptForCall', () => {
     })
     expect(approvalPromptForCall(call('browser_eval', { expression: '1+1' }), 'auto', FRAMES, 'zh')).toMatchObject({
       kind: 'action',
+      canTrust: true,
+    })
+    expect(approvalPromptForCall(call('browser_eval', { expression: '1+1' }), 'auto', FRAMES, 'zh')?.advancedPermission)
+      .toBeUndefined()
+    expect(approvalPromptForCall(call('browser_back'), 'auto', FRAMES, 'zh')).toMatchObject({
+      kind: 'action',
+      advancedPermission: 'history',
+      canTrust: false,
     })
   })
 
@@ -104,11 +112,11 @@ describe('approvalPromptForCall', () => {
     expect(prompt?.summary).not.toContain(absolutePath)
   })
 
-  it('treats browser_open_tab as destination-scoped and keeps eval high-risk', () => {
+  it('treats browser_open_tab as destination-scoped and follows origin trust for eval', () => {
     const open = approvalPromptForCall(call('browser_open_tab', { url: 'https://new.example/path' }), 'auto', [], 'en')
     expect(open).toMatchObject({ kind: 'action', origins: ['https://new.example'], canTrust: true })
     const evalPrompt = approvalPromptForCall(call('browser_eval', { expression: 'document.title' }), 'auto', FRAMES, 'en')
-    expect(evalPrompt).toMatchObject({ kind: 'action', canTrust: false })
+    expect(evalPrompt).toMatchObject({ kind: 'action', canTrust: true })
   })
 
   it('renders approval summaries in English for non-Chinese browsers', () => {

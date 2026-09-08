@@ -15,6 +15,7 @@ describe('panel protocol', () => {
     expect(isApprovalDecision('always-allow-reads')).toBe(true)
     expect(isApprovalDecision('trust-session')).toBe(true)
     expect(isApprovalDecision('trust-origin')).toBe(true)
+    expect(isApprovalDecision('trust-advanced-session')).toBe(false)
     expect(isApprovalDecision('trust-forever')).toBe(false)
   })
 

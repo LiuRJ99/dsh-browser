@@ -118,4 +118,10 @@ describe('actionCoveredByTrustedOrigins', () => {
     expect(actionCoveredByTrustedOrigins(action({ origins: ['https://other.example'] }), ['<all_urls>'])).toBe(false)
     expect(actionCoveredByTrustedOrigins(action({ origins: ['https://other.example'] }), ['*'])).toBe(true)
   })
+
+  it('uses one origin trust path for eval but keeps unknown boundaries guarded', () => {
+    expect(actionCoveredByTrustedOrigins(action({ action: 'browser_eval' }), trusted)).toBe(true)
+    expect(actionCoveredByTrustedOrigins(action({ action: 'browser_back', advancedPermission: 'history' }), ['*'])).toBe(false)
+    expect(actionCoveredByTrustedOrigins(action({ action: 'browser_close_tab' }), ['*'])).toBe(false)
+  })
 })

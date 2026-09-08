@@ -649,6 +649,8 @@ describe('per-session tab management and isolation', () => {
       expect(chromeMock.create).toHaveBeenCalledTimes(2)
     })
 
+    const localSetBeforeAdvancedGrant = chromeMock.localSet.mock.calls.length
+
     // 3. Subagent calls browser_attach_tab to take over Tab 11
     ws.receive({
       t: 'tool.call',
@@ -665,7 +667,8 @@ describe('per-session tab management and isolation', () => {
     const approval = panel.postMessage.mock.calls
       .map(([message]) => message as { type?: string; request?: { id?: string } })
       .find((message) => message.type === 'approval.request')
-    panel.onMessage.emit({ type: 'approval.response', id: approval?.request?.id, decision: 'allow-once' })
+    expect(approval?.request).toMatchObject({ canTrust: true, origins: ['https://example.com'] })
+    panel.onMessage.emit({ type: 'approval.response', id: approval?.request?.id, decision: 'trust-session' })
 
     await vi.waitFor(() => {
       const results = ws.sent
@@ -673,8 +676,27 @@ describe('per-session tab management and isolation', () => {
         .filter((frame) => frame.t === 'tool.result')
       expect(results.some((r) => r.id === 'call-attach' && r.ok === true)).toBe(true)
     })
+    expect(chromeMock.localSet).toHaveBeenCalledTimes(localSetBeforeAdvancedGrant)
 
-    // 4. Subagent subsequently calls browser_snapshot -> targets Tab 11!
+    // 4. The session grant covers another attach without a second prompt.
+    panel.postMessage.mockClear()
+    ws.receive({
+      t: 'tool.call',
+      id: 'call-attach-again',
+      name: 'browser_attach_tab',
+      args: { tabId: 11 },
+      sessionId: 'subagent-session',
+      expiresAt: Date.now() + 10000,
+    })
+    await vi.waitFor(() => {
+      const results = ws.sent
+        .map((raw) => JSON.parse(raw) as { t?: string; id?: string; ok?: boolean })
+        .filter((frame) => frame.t === 'tool.result')
+      expect(results.some((result) => result.id === 'call-attach-again' && result.ok === true)).toBe(true)
+    })
+    expect(panel.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
+
+    // 5. Subagent subsequently calls browser_snapshot -> targets Tab 11!
     ws.receive({
       t: 'tool.call',
       id: 'call-subagent-snapshot',
@@ -711,8 +733,9 @@ describe('per-session tab management and isolation', () => {
       expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
     })
     const closeApproval = panel.postMessage.mock.calls
-      .map(([message]) => message as { type?: string; request?: { id?: string } })
+      .map(([message]) => message as { type?: string; request?: { id?: string; advancedPermission?: string } })
       .find((message) => message.type === 'approval.request')
+    expect(closeApproval?.request?.advancedPermission).toBeUndefined()
     panel.onMessage.emit({ type: 'approval.response', id: closeApproval?.request?.id, decision: 'allow-once' })
 
     await vi.waitFor(() => {

@@ -53,6 +53,7 @@ import {
 } from './tools.ts'
 import {
   isApprovalDecision,
+  type AdvancedBrowserPermission,
   type ApprovalAuthorization,
   type ApprovalPrompt,
   type ApprovalRequest,
@@ -185,6 +186,9 @@ const recentSession = new RecentSessionTracker({
 })
 /** Ephemeral allowlist: cleared when the last side panel closes or this worker restarts. */
 const sessionTrustedActionOrigins = new Set<string>()
+/** Session-scoped grants for advanced browser capabilities. */
+const sessionAdvancedPermissions = new Map<string | symbol, Set<AdvancedBrowserPermission>>()
+const DEFAULT_ADVANCED_PERMISSION_SESSION = Symbol('default-advanced-permissions')
 /** Tool calls that can still be withdrawn by a bridge `tool.cancel` frame. */
 const activeToolCalls = new Map<string, AbortController>()
 let lastPersistedAffinity: string | undefined
@@ -923,6 +927,22 @@ function bindOpenedTab(tab: chrome.tabs.Tab, sessionId?: string): boolean {
   return true
 }
 
+function advancedPermissionSessionKey(sessionId?: string): string | symbol {
+  const normalized = sessionId?.trim()
+  return normalized === undefined || normalized === '' ? DEFAULT_ADVANCED_PERMISSION_SESSION : normalized
+}
+
+function hasAdvancedSessionPermission(permission: AdvancedBrowserPermission, sessionId?: string): boolean {
+  return sessionAdvancedPermissions.get(advancedPermissionSessionKey(sessionId))?.has(permission) === true
+}
+
+function grantAdvancedSessionPermission(permission: AdvancedBrowserPermission, sessionId?: string): void {
+  const key = advancedPermissionSessionKey(sessionId)
+  const granted = sessionAdvancedPermissions.get(key) ?? new Set<AdvancedBrowserPermission>()
+  granted.add(permission)
+  sessionAdvancedPermissions.set(key, granted)
+}
+
 async function authorizeToolCall(
   prompt: ApprovalPrompt,
   signal: AbortSignal,
@@ -931,6 +951,11 @@ async function authorizeToolCall(
 ): Promise<ApprovalAuthorization> {
   await settingsReady
   if (signal.aborted) return 'cancelled'
+  const effectiveSessionId = sessionId ?? tabAffinity.focusedSession() ?? undefined
+  if (prompt.kind === 'action' && prompt.advancedPermission !== undefined
+    && hasAdvancedSessionPermission(prompt.advancedPermission, effectiveSessionId)) {
+    return 'approved'
+  }
   if (actionCoveredByTrustedOrigins(
     prompt,
     sessionTrustedActionOrigins,
@@ -946,9 +971,15 @@ async function authorizeToolCall(
     await persistSettings({ sharePageContent: 'auto' })
     return 'approved'
   }
-  if (decision === 'trust-session' && prompt.kind === 'action' && prompt.canTrust && prompt.origins.length === 1) {
-    sessionTrustedActionOrigins.add(prompt.origins[0]!)
-    return 'approved'
+  if (decision === 'trust-session' && prompt.kind === 'action') {
+    if (prompt.advancedPermission !== undefined) {
+      grantAdvancedSessionPermission(prompt.advancedPermission, effectiveSessionId)
+      return 'approved'
+    }
+    if (prompt.canTrust && prompt.origins.length === 1) {
+      sessionTrustedActionOrigins.add(prompt.origins[0]!)
+      return 'approved'
+    }
   }
   // Permanent trust is opt-in and only applies to one stable origin at a time.
   if (decision === 'trust-origin' && prompt.kind === 'action' && prompt.canTrust && prompt.origins.length === 1) {
@@ -1062,7 +1093,11 @@ async function pushBudgetToControlledTab(negotiated: BridgeCaps): Promise<void> 
   }
 }
 
-async function handleAttachTabCall(call: ToolCall, signal: AbortSignal): Promise<ToolAnswer> {
+async function handleAttachTabCall(
+  call: ToolCall,
+  signal: AbortSignal,
+  commitAction?: () => void,
+): Promise<ToolAnswer> {
   const rawId = call.args.tabId
   const tabId = typeof rawId === 'number' && Number.isInteger(rawId) && rawId > 0 ? rawId : undefined
   if (tabId === undefined) {
@@ -1078,13 +1113,15 @@ async function handleAttachTabCall(call: ToolCall, signal: AbortSignal): Promise
     const origin = typeof targetTab.url === 'string' && /^https?:\/\//i.test(targetTab.url)
       ? new URL(targetTab.url).origin
       : undefined
+    const effectiveSessionId = call.sessionId ?? tabAffinity.focusedSession() ?? undefined
     const authorization = await authorizeToolCall({
       kind: 'action',
       action: 'browser_attach_tab',
-      summary: `Attach this session to tab ${tabId} (${targetTab.title || 'Untitled'}).`,
+      summary: `Attach this session to tab ${tabId} (${origin ?? 'unknown origin'}).`,
       origins: origin === undefined ? [] : [origin],
-      canTrust: false,
-    }, signal, targetTab.windowId, call.sessionId)
+      canTrust: origin !== undefined,
+
+    }, signal, targetTab.windowId, effectiveSessionId)
     if (authorization !== 'approved') {
       return { ok: false, error: { code: authorization === 'timed-out' ? 'timeout' : authorization === 'cancelled' ? 'bridge-closed' : 'action-failed', message: authorization === 'denied' ? 'The user denied the browser approval request for "browser_attach_tab".' : 'The browser approval request for "browser_attach_tab" could not be completed.' } }
     }
@@ -1092,7 +1129,8 @@ async function handleAttachTabCall(call: ToolCall, signal: AbortSignal): Promise
     if ((currentTab.url ?? '') !== (targetTab.url ?? '')) {
       return { ok: false, error: { code: 'content-unavailable', message: 'The selected tab changed while approval was pending. Call browser_list_tabs again before retrying.' } }
     }
-    const sid = call.sessionId ?? tabAffinity.focusedSession() ?? 'default'
+    const sid = effectiveSessionId ?? 'default'
+    commitAction?.()
     const previous = tabAffinity.attachSessionTab(sid, summarizeTab(currentTab) ?? summary)
     if (previous !== undefined && previous.tabId !== tabId && previous.url === 'about:blank') {
       const otherSessions = tabAffinity.sessionIdsForTab(previous.tabId)
@@ -1106,7 +1144,7 @@ async function handleAttachTabCall(call: ToolCall, signal: AbortSignal): Promise
     return {
       ok: true,
       result: {
-        text: `Successfully attached session to tab ${targetTab.id} ("${targetTab.title || 'Untitled'}" - ${targetTab.url || 'about:blank'}). Subsequent browser actions in this session will operate on this tab.`,
+        text: `Successfully attached session to tab ${targetTab.id} (${origin ?? 'unknown origin'}). Subsequent browser actions in this session will operate on this tab.`,
       },
     }
   } catch (err: unknown) {
@@ -1129,7 +1167,7 @@ function routeToolCall(call: ToolCall): void {
 
   if (call.name === 'browser_attach_tab') {
     const owner = bridge
-    void handleAttachTabCall(call, controller.signal).then((answer) => {
+    void handleAttachTabCall(call, controller.signal, commitAction).then((answer) => {
       if (activeToolCalls.get(call.id) !== controller || bridge !== owner) return
       if (controller.signal.aborted) {
         owner.send({
@@ -1293,6 +1331,7 @@ async function startBridge(): Promise<void> {
     const client = new BridgeClient({
       onStateChange: (state) => {
         if (state !== 'connected') {
+          sessionAdvancedPermissions.clear()
           cancelAllToolCalls()
           interactionResponses.failAll(responseMessages().disconnected)
           transientEvents.clear()
@@ -1386,6 +1425,8 @@ chrome.runtime.onConnect.addListener((port) => {
           && typeof rpcMsg.payload === 'object' && rpcMsg.payload !== null) {
           const targetSessionId = (rpcMsg.payload as { sessionId?: string }).sessionId
           if (typeof targetSessionId === 'string' && targetSessionId.trim() !== '') {
+            sessionAdvancedPermissions.delete(targetSessionId)
+            cancelPendingApprovals(targetSessionId)
             const tabToRemove = tabAffinity.removeSession(targetSessionId)
             if (tabToRemove?.tabId !== undefined && typeof chrome?.tabs?.remove === 'function') {
               chrome.tabs.remove(tabToRemove.tabId).catch(() => {})
@@ -1522,6 +1563,10 @@ chrome.runtime.onConnect.addListener((port) => {
         recentSession.remember(session.sessionId)
         if (typeof session.sessionId === 'string' && session.sessionId.trim() !== '') {
           const sid = session.sessionId
+          if (session.isNew === true) {
+            sessionAdvancedPermissions.delete(sid)
+            cancelPendingApprovals(sid)
+          }
           if (session.isNew === true && tabAffinity.getSessionTab(sid) === undefined) {
             const bind = affinityReady.then(async () => {
               if (tabAffinity.getSessionTab(sid) !== undefined) return
@@ -1660,6 +1705,7 @@ chrome.runtime.onConnect.addListener((port) => {
       bridgeStartRevision += 1
       bridge?.suspendReconnect()
       sessionTrustedActionOrigins.clear()
+      sessionAdvancedPermissions.clear()
       approvals.notifyPending()
       if (bridge?.state !== 'connected') disarmBridgeKeepalive()
     }
