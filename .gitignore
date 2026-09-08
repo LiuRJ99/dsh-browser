@@ -3,6 +3,15 @@ node_modules/
 **/lib/
 !benchmark/lib/
 !benchmark/lib/**
+# Bridge runtime artifacts are committed for Git/repository installs.
+!packages/browser/bridge-browser/lib/
+packages/browser/bridge-browser/lib/*
+!packages/browser/bridge-browser/lib/index.js
+!packages/browser/bridge-browser/lib/invariant.js
+!packages/browser/bridge-browser/lib/protocol.js
+!packages/browser/bridge-browser/lib/types/
+packages/browser/bridge-browser/lib/types/*
+!packages/browser/bridge-browser/lib/types/**/*.d.ts
 **/dist/
 **/dist-firefox/
 .DS_Store
