@@ -50,6 +50,7 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 | Click element | `browser_click` | Click links, buttons, checkboxes, and other controls by inventory number |
 | Fill forms | `browser_type` | React/Vue-compatible input; `replace` clears the field first |
 | Upload files | `browser_upload_file` | Upload local PNG/JPEG/WebP files to a numbered file input; approval follows the destination origin's trust policy |
+| Attach tab | `browser_attach_tab` | Attach main sessions and subagents directly to existing tabs by id |
 | Press keys | `browser_press` | Keyboard events such as Enter, Tab, Escape, and arrow keys |
 | Scroll | `browser_scroll` | Viewport scrolling: up, down, top, and bottom |
 | Navigate | `browser_navigate` / `browser_back` / `browser_forward` / `browser_reload` | Navigation inside the controlled tab, with login state preserved |
@@ -57,6 +58,33 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 | Wait for stability | `browser_wait` | Page-load and render-settle detection |
 | Send images | `session.prompt` / `session.attachment` | Host-capability-gated image drafts, image-only prompts, and durable history previews |
 | Quote a selection | side panel composer | Text you highlight in the page appears in the composer and is sent with your next message as fenced, attributed page content |
+
+## Fork Enhancements (v0.1.4)
+
+> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), version `v0.1.4`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, dedicated session tab isolation, and improved permission governance.
+
+### 1. Multi-Tab Coordination & `browser_attach_tab`
+
+* **Explicit Tab Attachment (`browser_attach_tab`)**: introduces `browser_attach_tab`, enabling primary sessions and autonomous subagents to attach directly to existing browser tabs by `tabId` without forcing new tabs open, enabling seamless multi-session tab reuse and collaboration.
+* **Per-Session Dedicated Browser Tabs**: supports binding dedicated tabs per DSH session, ensuring parallel sessions operate in isolated tabs with independent navigation and state.
+* **Service Worker Tool Routing & Resilience**: tab management tools route directly in the background service worker; calling `browser_list_tabs` on uninjectable pages (such as `chrome://` or webstore URLs) resolves safely without errors.
+
+### 2. Unified Origin Trust & Approval Flow
+
+* **Unified Origin Trust**: page interactions (clicks, inputs, uploads, and navigations) share a consolidated origin trust verification pipeline.
+* **Persistent Trust Actions**: side panel explicitly labels persistent trust options, reducing repetitive confirmation prompts.
+* **Polished Approval Flow**: improved session tab state transitions and permission approval handling.
+
+### 3. Lazy Gate & Skill Integration
+
+* **Session-Lazy Capability Gating**: integrates with `dsh-tool-lazy-gate` so snapshot injection and browser tools stay dormant until explicitly unlocked in the session.
+* **Automated Skill Registration**: registers browser authorization skills directly into the DSH skill catalog (`/browser`).
+
+### 4. Stability & History Recovery
+
+* **Scoped Text Matching**: element clicks honor text within target bounds to prevent mis-clicks on identically structured DOM nodes.
+* **History Event Frame Unwrapping**: correctly unwraps history event envelope frames to eliminate panel white-screen errors and restore conversation history cleanly.
+* **DSH 0.1.2-rc.1 Compatibility**: updated for host contracts and lifecycle events in DSH 0.1.2-rc.1.
 
 ## Repository layout
 

@@ -50,6 +50,7 @@ Playwright / 扩展的配对耗时比为 **1.24**（95% CI **1.16–1.34**）：
 | 点击元素 | `browser_click` | 按编号点击链接/按钮/复选框等 |
 | 填写表单 | `browser_type` | 输入文本（React/Vue 受控组件兼容），`replace` 清空重填 |
 | 上传文件 | `browser_upload_file` | 将本地 PNG/JPEG/WebP 文件上传到编号文件输入框；确认弹窗遵循目标来源的信任策略 |
+| 附着标签页 | `browser_attach_tab` | 支持主会话和 Subagent 直接附着到已有标签页并执行后续操作 |
 | 按键 | `browser_press` | 键盘事件（Enter/Tab/Escape/方向键…） |
 | 滚动 | `browser_scroll` | 视口滚动（up/down/top/bottom） |
 | 页面导航 | `browser_navigate` / `browser_back` / `browser_forward` / `browser_reload` | 受控标签页内导航，保留登录态 |
@@ -57,6 +58,33 @@ Playwright / 扩展的配对耗时比为 **1.24**（95% CI **1.16–1.34**）：
 | 等待稳定 | `browser_wait` | 页面加载与渲染稳定检测 |
 | 发送图片 | `session.prompt` / `session.attachment` | 按宿主能力启用图片草稿、纯图片消息和持久历史预览 |
 | 引用选中内容 | 侧栏输入框 | 在页面里划选的文字会出现在输入框，随下一条消息一起发送，并带上来源与不可信内容边界 |
+
+## Fork 增强特性（v0.1.4）
+
+> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，版本 `v0.1.4`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、多标签页并发与权限治理进行了重点增强。
+
+### 1. 多标签页协同与标签页附着（`browser_attach_tab`）
+
+* **主动标签页附着（`browser_attach_tab`）**：新增 `browser_attach_tab` 工具，支持主会话及后台 Subagent 主动根据 `tabId` 附着到已有的浏览器标签页上，无需强行打开新标签页，实现多会话协同与既有会话复用。
+* **Per-Session 专属独立标签页（Dedicated Tabs）**：支持为每个独立 DSH 会话分配与维护专属标签页，多会话并发执行浏览器任务时各自隔离操作与导航，避免相互抢占焦点。
+* **后台 Service Worker 路由加固**：标签页管理相关工具直接在扩展 Background Service Worker 中路由处理；在非注入页面（如浏览器设置页、扩展商店等）执行 `browser_list_tabs` 时安全静默，不抛出异常阻断流程。
+
+### 2. 统一来源信任与权限交互（Unified Origin Trust）
+
+* **全链路来源信任统一**：将点击、表单输入、文件上传和页面跳转的安全来源校验统一收口至相同的信任策略中。
+* **持久化信任操作**：侧边栏面板支持明确标识持久化信任动作（Persistent Trust），避免重复弹窗打扰。
+* **会话标签页审批流程优化**：改进会话激活与授权状态的同步逻辑，减少不必要的权限反复阻断。
+
+### 3. Lazy Gate 联动与 Skill 自动注册
+
+* **会话级懒加载门控**：与 `dsh-tool-lazy-gate` 门控联动，快照注入与浏览器交互工具受控于会话当前是否显式解锁 Browser 能力。
+* **自动注册浏览器授权 Skill**：宿主自动向 Skill 注册表中注册浏览器授权技能，用户通过 `/browser` 即可完成安全受控的按需解锁。
+
+### 4. 稳定性与历史恢复修复
+
+* **基于文本的精准点击保障**：点击带有特定文本范围的元素时增加文本验证逻辑，避免错点相似结构控件。
+* **历史帧解析修复**：正确拆解历史事件信封帧（Event Envelope Frames），彻底修复侧栏面板中恢复会话历史数据时的渲染与回显问题。
+* **DSH 0.1.2-rc.1 宿主适配**：全面适配 DSH 最新宿主契约与生命周期钩子。
 
 ## 组成
 
