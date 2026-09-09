@@ -499,22 +499,19 @@ async function* bridgeEventIterator(
     }
   })()
 
-  const listTask = (async () => {
-    const listed = await gateway.request('session/list', { _request: {} }, signal)
-    if (!listed.ok || !isRecord(listed.value) || !Array.isArray(listed.value.items)) return
-    for (const entry of listed.value.items) {
-      if (isRecord(entry) && typeof entry.sessionId === 'string') startFollow(entry.sessionId)
-    }
-  })().catch((error: unknown) => {
-    if (!signal.aborted) queue.fail(error)
-  })
+  // Do not bootstrap followers from session/list here. The bridge event stream
+  // is a live notification channel, while session/follow on a cold Session also
+  // promotes it to a live Agent. Following every persisted Session on extension
+  // connect therefore resumes the entire history corpus and exhausts the host
+  // heap. Followers are established on the session-specific added/status events
+  // below, or when the extension explicitly starts using a Session.
 
   try {
     yield* queue.iterate(signal)
   } finally {
     for (const controller of followControllers.values()) controller.abort()
     queue.end()
-    await Promise.allSettled([eventTask, listTask, ...followTasks])
+    await Promise.allSettled([eventTask, ...followTasks])
     callbacks.onClosed()
   }
 }

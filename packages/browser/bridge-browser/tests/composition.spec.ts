@@ -135,6 +135,18 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 }
 
 describe('real Loader composition', () => {
+  it('does not eagerly follow every persisted session when the extension connects', { timeout: 60_000 }, async () => {
+    const { ctx, port } = await loadComposition()
+    const invocations = ctx.get('targetGatewayInvocations') as string[]
+    const client = await connect(port)
+    send(client.ws, { t: 'hello', token: '', caps: { textOnly: true, snapshotMaxChars: 32_000, maxInteractiveItems: 60 } })
+    await waitFor(() => client.frames.some((frame) => frame.t === 'hello.ok'))
+    await new Promise((resolve) => { setTimeout(resolve, 100) })
+
+    expect(invocations).not.toContain('session/list')
+    client.ws.close()
+  })
+
   it('boots the bridge, authenticates over a real socket, and drives real gateway RPCs', { timeout: 60_000 }, async () => {
     const { ctx, port } = await loadComposition()
 

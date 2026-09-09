@@ -39,6 +39,7 @@ export const TargetGatewayHost = {
     const workspacePaths = new Map<string, string>()
     const eventHub = new EventHub()
     const pendingQuestions = new Map<string, PendingQuestion>()
+    const invokedEndpoints: string[] = []
 
     const summary = (state: SessionState): PlainRecord => {
       const events = state.session.snapshotEvents() as readonly PlainRecord[]
@@ -99,6 +100,7 @@ export const TargetGatewayHost = {
     const invoke = async ({ namespace, method, args, signal }: TargetGatewayRequest): Promise<unknown> => {
       signal.throwIfAborted()
       const endpoint = `${namespace}/${method}`
+      invokedEndpoints.push(endpoint)
       switch (endpoint) {
         case 'workspace/create': {
           const request = record(args.request)
@@ -216,6 +218,7 @@ export const TargetGatewayHost = {
     }
     ctx.provide('connection', connection)
     ctx.provide('typertGateway', gateway)
+    ctx.provide('targetGatewayInvocations', invokedEndpoints)
     ctx.effect(() => () => eventHub.close(), 'target-gateway-host: event hub')
   },
 }
