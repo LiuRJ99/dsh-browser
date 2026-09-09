@@ -61,26 +61,45 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 
 ## Fork Enhancements (v0.1.5)
 
-> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), version `v0.1.5`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, dedicated session tab isolation, and improved permission governance.
+> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), current version `v0.1.5`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, heap memory stabilization, dedicated session tab isolation, and improved permission governance.
 
-### 1. Multi-Tab Coordination & `browser_attach_tab`
+### 1. Installation from this Fork
+
+Run the managed installer pointing to the maintained fork repository:
+
+macOS & Linux:
+```sh
+curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
+```
+
+Windows (PowerShell):
+```powershell
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+```
+
+### 2. Multi-Tab Coordination & `browser_attach_tab`
 
 * **Explicit Tab Attachment (`browser_attach_tab`)**: introduces `browser_attach_tab`, enabling primary sessions and autonomous subagents to attach directly to existing browser tabs by `tabId` without forcing new tabs open, enabling seamless multi-session tab reuse and collaboration.
 * **Per-Session Dedicated Browser Tabs**: supports binding dedicated tabs per DSH session, ensuring parallel sessions operate in isolated tabs with independent navigation and state.
 * **Service Worker Tool Routing & Resilience**: tab management tools route directly in the background service worker; calling `browser_list_tabs` on uninjectable pages (such as `chrome://` or webstore URLs) resolves safely without errors.
 
-### 2. Unified Origin Trust & Approval Flow
+### 3. Memory Governance & Bridge Stability (Key in v0.1.5)
+
+* **Decoupled Full-Session Tracking (Prevents Node OOM)**: restructured extension-bridge handshake so that connecting the extension no longer traverses and tracks all persisted historical sessions, eliminating the critical risk of reviving cold sessions into live agents and exhausting the host Node heap memory.
+* **Bridge Regression Verification**: added loader/WebSocket regression tests ensuring extension connections never accidentally trigger full `session/list` follow streams.
+
+### 4. Unified Origin Trust & Approval Flow
 
 * **Unified Origin Trust**: page interactions (clicks, inputs, uploads, and navigations) share a consolidated origin trust verification pipeline.
 * **Persistent Trust Actions**: side panel explicitly labels persistent trust options, reducing repetitive confirmation prompts.
 * **Polished Approval Flow**: improved session tab state transitions and permission approval handling.
 
-### 3. Lazy Gate & Skill Integration
+### 5. Lazy Gate & Skill Integration
 
 * **Session-Lazy Capability Gating**: integrates with `dsh-tool-lazy-gate` so snapshot injection and browser tools stay dormant until explicitly unlocked in the session.
 * **Automated Skill Registration**: registers browser authorization skills directly into the DSH skill catalog (`/browser`).
 
-### 4. Stability & History Recovery
+### 6. Detail Refinements & History Recovery
 
 * **Scoped Text Matching**: element clicks honor text within target bounds to prevent mis-clicks on identically structured DOM nodes.
 * **History Event Frame Unwrapping**: correctly unwraps history event envelope frames to eliminate panel white-screen errors and restore conversation history cleanly.
