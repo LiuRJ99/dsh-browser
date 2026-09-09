@@ -17,13 +17,13 @@ The standard `dsh plugin` command alone cannot install this project. The integra
 macOS and Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
 ```
 
 Windows, in PowerShell:
 
 ```powershell
-$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
 ```
 
 When the installer opens `chrome://extensions`, follow its instructions to load or reload **dsh Browser Assistant**. If dsh is already running, restart it after installation. See [Detailed installation and usage](#detailed-installation-and-usage) for prerequisites, startup commands, updates, and developer installation.
@@ -59,9 +59,9 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 | Send images | `session.prompt` / `session.attachment` | Host-capability-gated image drafts, image-only prompts, and durable history previews |
 | Quote a selection | side panel composer | Text you highlight in the page appears in the composer and is sent with your next message as fenced, attributed page content |
 
-## Fork Enhancements (v0.1.4)
+## Fork Enhancements (v0.1.5)
 
-> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), version `v0.1.4`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, dedicated session tab isolation, and improved permission governance.
+> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), version `v0.1.5`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, dedicated session tab isolation, and improved permission governance.
 
 ### 1. Multi-Tab Coordination & `browser_attach_tab`
 
@@ -113,13 +113,13 @@ Requirements: Node.js `^22.19` or `>=24`, Corepack/pnpm, and Chrome 116+ or Fire
 For a managed installation, run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
 ```
 
 or, on Windows:
 
 ```powershell
-$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
 ```
 
 The installer downloads `main`, builds and registers the bridge plugin, builds the Chrome extension into `~/.dsh/browser-extension`, and opens `chrome://extensions`. On the first install, load that directory as an unpacked extension; on updates, click **Reload**. Restart dsh if it is already running.
@@ -131,7 +131,7 @@ The Windows command downloads `install.ps1` and runs it rather than piping it in
 To install the current branch from a source checkout instead:
 
 ```sh
-git clone https://github.com/Lum1104/dsh-browser.git
+git clone https://github.com/LiuRJ99/dsh-browser.git
 cd dsh-browser
 ./scripts/install.sh
 ```

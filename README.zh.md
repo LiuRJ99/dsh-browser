@@ -17,13 +17,13 @@
 macOS 与 Linux：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
 ```
 
 Windows（PowerShell）：
 
 ```powershell
-$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
 ```
 
 安装器打开 `chrome://extensions` 后，请按提示加载或重新加载 **dsh 浏览器助手**。如果 dsh 已经在运行，安装完成后请重启。前置要求、启动命令、更新方式和开发者安装详见[详细安装与使用](#详细安装与使用)。
@@ -59,9 +59,9 @@ Playwright / 扩展的配对耗时比为 **1.24**（95% CI **1.16–1.34**）：
 | 发送图片 | `session.prompt` / `session.attachment` | 按宿主能力启用图片草稿、纯图片消息和持久历史预览 |
 | 引用选中内容 | 侧栏输入框 | 在页面里划选的文字会出现在输入框，随下一条消息一起发送，并带上来源与不可信内容边界 |
 
-## Fork 增强特性（v0.1.4）
+## Fork 增强特性（v0.1.5）
 
-> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，版本 `v0.1.4`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、多标签页并发与权限治理进行了重点增强。
+> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，版本 `v0.1.5`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、多标签页并发与权限治理进行了重点增强。
 
 ### 1. 多标签页协同与标签页附着（`browser_attach_tab`）
 
@@ -113,13 +113,13 @@ scripts/install.ps1
 托管安装请运行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
 ```
 
 Windows 请运行：
 
 ```powershell
-$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+$s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
 ```
 
 安装器会下载 `main`、构建并注册桥插件、把 Chrome 扩展构建到 `~/.dsh/browser-extension`，然后打开 `chrome://extensions`。首次安装时，请把该目录作为已解压扩展加载；更新时点击**重新加载**。如果 dsh 已在运行，请重启。
@@ -131,7 +131,7 @@ Windows 命令先下载 `install.ps1` 再执行，而不是管道给 `Invoke-Exp
 如需从源码 checkout 安装当前分支：
 
 ```sh
-git clone https://github.com/Lum1104/dsh-browser.git
+git clone https://github.com/LiuRJ99/dsh-browser.git
 cd dsh-browser
 ./scripts/install.sh
 ```

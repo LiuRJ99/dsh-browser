@@ -56,13 +56,13 @@ The recommended zero-configuration command does not require Git or a local clone
 1. **Build and install the extension**:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.sh | bash
    ```
 
    On Windows, run this in PowerShell instead:
 
    ```powershell
-   $s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/Lum1104/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
+   $s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/dsh-browser/refs/heads/main/scripts/install.ps1 -OutFile $s; powershell -NoProfile -ExecutionPolicy Bypass -File $s
    ```
 
    The script downloads a managed workspace to `~/.dsh/dsh-browser`, builds the bridge plugin, registers its official bundle in the local dsh `web` profile, builds the extension, copies the output to the stable directory `~/.dsh/browser-extension`, and opens `chrome://extensions`. Enable Developer mode, choose Load unpacked, and select the extension directory. Running the command again updates the managed installation.
@@ -70,7 +70,7 @@ The recommended zero-configuration command does not require Git or a local clone
    A cloned checkout uses the same installer without downloading or overwriting source files:
 
    ```sh
-   git clone https://github.com/Lum1104/dsh-browser.git
+   git clone https://github.com/LiuRJ99/dsh-browser.git
    cd dsh-browser
    ./scripts/install.sh
    ```

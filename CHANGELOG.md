@@ -3,6 +3,14 @@
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.5] - 2026-09-09
+
+### Fixed
+
+- **浏览器桥接内存溢出**：扩展连接时不再遍历并跟踪所有持久化 Session，避免冷 Session 被批量恢复为 live Agent，导致 dsh 宿主 Node 堆内存耗尽。
+- **桥接回归覆盖**：新增真实 Loader/WebSocket 组合测试，确保扩展连接不会触发全量 `session/list` follow。
+- **安装来源统一**：远程安装器和扩展更新检查改为使用 `LiuRJ99/dsh-browser` 仓库，避免安装到未包含修复的 upstream 版本。
+
 ## [0.1.4] - 2026-08-28
 
 ### Added
@@ -60,6 +68,7 @@
 
 - 首次发布：token 认证的 WebSocket 桥接插件（`@yuxianglin/dsh-bridge-browser`）与 Chrome MV3 侧栏扩展（dsh-browser-extension），提供文本化浏览器快照与受控标签页操作工具。
 
+[0.1.5]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.5
 [0.1.3]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.3
 [0.1.2]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.2
 [0.1.1]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.1
