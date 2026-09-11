@@ -3,7 +3,7 @@
  * over the bridge to the connected extension, which performs the action in the
  * user's explicitly controlled tab and returns a pure-text result.
  *
- * The whole surface is text-only by design (DeepSeek models have no vision):
+ * The browser tool surface uses structured text by design:
  * `browser_snapshot` renders the page as structured text with a numbered
  * interactive inventory, and every other tool addresses elements by that
  * inventory's stable index. Results are single `{ text }` objects rendered as

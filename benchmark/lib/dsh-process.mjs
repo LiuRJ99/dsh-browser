@@ -58,7 +58,7 @@ export async function startDshBackend({
   await writeFile(patch, patchText)
   const logPath = join(logsRoot, `dsh-${backend}.log`)
   const log = createWriteStream(logPath, { flags: 'a' })
-  const child = spawn('pnpm', ['exec', 'dsh', '--profile', 'web', '--patch', patch, '--', '--port', String(port)], {
+  const child = spawn('pnpm', ['exec', 'dsh', '--profile', 'web', '--patch', patch, '--', '--no-open', '--port', String(port)], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -68,15 +68,27 @@ export async function startDshBackend({
       DSH_BROWSER_SESSION_WORKSPACE: resolve(benchmarkRoot, 'workspace'),
       DSH_EXT_TOKEN: 'dsh-browser-benchmark-local-token',
       DSH_PERMISSION_MODE: 'workspace-write',
+      DSH_TELEMETRY_DISABLED: '1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout.pipe(log)
   child.stderr.pipe(log)
   const baseUrl = `http://127.0.0.1:${port}`
+  let launchUrl
+  let outputBuffer = ''
+  child.stdout.on('data', (chunk) => {
+    outputBuffer = (outputBuffer + chunk.toString()).slice(-16_384)
+    for (const match of outputBuffer.matchAll(/dsh web: (https?:\/\/\S+)/gu)) {
+      try {
+        const url = new URL(match[1])
+        if (url.origin === baseUrl && url.searchParams.has('token')) launchUrl = url.href
+      } catch { /* Startup diagnostics are not necessarily URLs. */ }
+    }
+  })
   let client
   try {
-    client = await waitForDsh(baseUrl, { process: child })
+    client = await waitForDsh(baseUrl, { process: child, getLaunchUrl: () => launchUrl })
     if (backend === 'playwright') {
       await waitForPlaywrightStatus(baseUrl, child)
     }

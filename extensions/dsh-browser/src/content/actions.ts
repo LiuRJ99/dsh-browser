@@ -4,7 +4,7 @@
  * returning a short text status. Navigations return a fresh full snapshot
  * because the document — and the id registry — reset.
  *
- * All action results are pure text (DeepSeek models have no vision), so a
+ * All browser action results use structured text, so a
  * status line tells the model what happened and what state remains.
  *
  * @module

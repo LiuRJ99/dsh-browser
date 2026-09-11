@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import { zstdCompressSync } from 'node:zlib'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const bridge = join(root, 'packages/browser/bridge-browser')
@@ -21,6 +22,23 @@ const home = join(temp, 'home')
 const marker = join(temp, 'observation.json')
 const patch = join(temp, 'smoke.patch.yml')
 const sessionId = `session-${randomUUID()}`
+const legacySessionId = `session-${randomUUID()}`
+const legacyProject = temp.replace(/[\\/:]+/g, '-').replace(/[^A-Za-z0-9._-]/g,
+  char => `~${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`).replace(/^-+/, '')
+const legacyDirectory = join(home, 'sessions', `--${legacyProject.slice(0, 251)}--`, legacySessionId)
+const legacyFile = join(legacyDirectory, 'session.v2.jsonl.zstd')
+// A released V2 envelope, read through the production migration catalog and
+// the bridge. Keep the original bytes so the smoke also checks preservation.
+const legacyLog = [
+  { type: 'session', version: 2, id: legacySessionId, cwd: temp, createdAt: 1, isSeeded: false, delegationDepth: 0 },
+  { type: 'turn/start', data: { turn: 1 } },
+  { type: 'step/start', data: { turn: 1, step: 1 } },
+  { type: 'user/message', surfaceOp: 'append', data: { id: 'legacy-user', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Saved browser conversation' }] } },
+  { type: 'step/end', data: { turn: 1, step: 1 } },
+  { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+].map((row, index) => JSON.stringify(index === 0 ? row : { ...row, seq: index - 1, time: index + 10 })).join('\n') + '\n'
+// The JSONL container requires its header in a separate Zstandard frame.
+const legacyBytes = Buffer.concat(legacyLog.trimEnd().split('\n').map(line => zstdCompressSync(Buffer.from(line + '\n'))))
 const token = randomUUID()
 const env = { ...process.env, DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' }
 // Do not inherit bridge settings or credentials from the developer's shell.
@@ -148,6 +166,8 @@ async function stop() {
 
 try {
   await mkdir(home, { recursive: true })
+  await mkdir(legacyDirectory, { recursive: true })
+  await writeFile(legacyFile, legacyBytes)
   await command(['plugin', '--profile', 'web', 'add', '-w', `@yuxianglin/dsh-bridge-browser@link:${bridge}`])
   let rpc = await start(false)
   const created = await rpc('session.create', { sessionId, cwd: temp })
@@ -156,12 +176,21 @@ try {
   assert.ok((await rpc('session.list', {})).items.some(item => item.sessionId === sessionId))
   const history = await rpc('session.history', { sessionId })
   assert.ok(Array.isArray(history.events))
+  const migrated = await rpc('session.history', { sessionId: legacySessionId })
+  assert.ok(migrated.events.some(({ event }) => event.type === 'system/message'), 'V2 migration must insert the V3 system head')
+  assert.equal(migrated.events.find(({ event }) => event.type === 'user/message')?.event.data.content[0].text, 'Saved browser conversation')
+  assert.deepEqual(await readFile(legacyFile), legacyBytes, 'migration must preserve the original V2 log')
   await stop()
   rpc = await start(true)
   assert.equal((await observation()).source, 'prepared')
   assert.ok((await rpc('session.list', {})).items.some(item => item.sessionId === sessionId))
   assert.deepEqual((await rpc('session.history', { sessionId })).events, history.events)
-  console.log('Real DSH smoke passed: discovery, token authentication, create/list/history, and prepared projections after restart')
+  const reopenedLegacy = await rpc('session.history', { sessionId: legacySessionId })
+  // Following a cold Session activates it after the opening snapshot and may
+  // append seed/permission metadata. The migrated history prefix stays exact.
+  assert.deepEqual(reopenedLegacy.events.slice(0, migrated.events.length), migrated.events)
+  assert.deepEqual(await readFile(legacyFile), legacyBytes)
+  console.log('Real DSH smoke passed: discovery, token authentication, create/list/history, V2 migration, and prepared projections after restart')
   succeeded = true
 } catch (error) {
   console.error(hostLog)

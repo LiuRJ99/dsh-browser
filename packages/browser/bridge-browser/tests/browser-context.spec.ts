@@ -7,7 +7,7 @@ import {
 } from '../src/browser-context.ts'
 
 function fakeAgent(id: string): Agent & { inject: ReturnType<typeof vi.fn> } {
-  return { id, inject: vi.fn() } as unknown as Agent & { inject: ReturnType<typeof vi.fn> }
+  return { id, inbox: { nextStep: [] }, inject: vi.fn() } as unknown as Agent & { inject: ReturnType<typeof vi.fn> }
 }
 
 describe('browser page context', () => {

@@ -6,7 +6,7 @@
  * client then authenticates over a real socket and drives Host calls against
  * the real Session store; disposal removes the tool registrations (HMR safety).
  *
- * Mocked boundary: the unpublished Gateway / Connection services;
+ * Mocked boundary: the Gateway / Connection services;
  * focused adapter tests pin their wire contracts against the upstream source,
  * while these cases verify Remote transport and Loader topology.
  */
@@ -25,11 +25,12 @@ import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
-import LlmService from '@deepseek-ai/dsh-llm'
+import LlmService, { createUserMessage, type GenerateOptions } from '@deepseek-ai/dsh-llm'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as BridgeBrowser from '../src/index.ts'
-import { BRIDGE_PATH, type BridgeFrame } from '../src/protocol.ts'
+import { BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD, BRIDGE_PATH, type BridgeFrame } from '../src/protocol.ts'
 
 const BRIDGE = '@yuxianglin/dsh-bridge-browser'
 const TOKEN = 'abcdabcdabcdabcdabcdabcdabcdabcd'
@@ -45,7 +46,7 @@ afterEach(async () => {
 })
 
 /**
- * Minimal structural implementation of the dsh 0.1.2 Host seams. Focused
+ * Minimal structural implementation of the dsh 0.1.5 Host seams. Focused
  * Remote-adapter tests pin the argument and stream contracts separately; this
  * fixture verifies Loader injection, real sockets, and real Session storage.
  */
@@ -53,16 +54,10 @@ const RemoteApiHost = {
   name: 'remote-api-host',
   inject: ['sessions'],
   apply(ctx: Context, config: { cwd: string }): void {
-    let remoteEventsReady = false
     const gateway = {
       wireStream: {
         async open(endpoint: string, _payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
           if (endpoint === '$events') {
-            if (!remoteEventsReady) {
-              throw Object.assign(new Error('forwarded Remote event source is unavailable'), {
-                code: 'gateway/service-unavailable',
-              })
-            }
             return {
               async *[Symbol.asyncIterator]() {
                 yield { type: 'ready', clientId: 'composition-client', host: { home: root } }
@@ -79,10 +74,6 @@ const RemoteApiHost = {
           message: String(error),
           details: {},
         }),
-      },
-      registerRemoteEvents: () => {
-        remoteEventsReady = true
-        return async () => { remoteEventsReady = false }
       },
       async invoke(request: { namespace: string; method: string; args: Record<string, unknown> }) {
         if (request.namespace === 'session' && request.method === 'create') {
@@ -133,6 +124,7 @@ async function loadComposition(): Promise<{ ctx: Context; configPath: string; po
     "    host: '127.0.0.1'",
     '    port: 0',
     "- name: '@deepseek-ai/dsh-session'",
+    "- name: '@deepseek-ai/dsh-session-projection'",
     "- name: '@deepseek-ai/dsh-user-questions'",
     "- name: '@deepseek-ai/dsh-agent'",
     "- name: '@deepseek-ai/dsh-system-prompt'",
@@ -159,6 +151,7 @@ async function loadComposition(): Promise<{ ctx: Context; configPath: string; po
   const modules = new Map<string, unknown>([
     ['@deepseek-ai/dsh-host-webserver', WebServer],
     ['@deepseek-ai/dsh-session', SessionStore],
+    ['@deepseek-ai/dsh-session-projection', SessionProjectionRegistry],
     ['@deepseek-ai/dsh-user-questions', UserQuestionService],
     ['@deepseek-ai/dsh-agent', AgentRegistry],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
@@ -234,6 +227,61 @@ async function connectReady(port: number): Promise<Awaited<ReturnType<typeof con
 }
 
 describe('real Loader composition', () => {
+  it('delivers only the latest followed page through the durable inbox without waking an idle Agent', async () => {
+    const { ctx, port } = await loadComposition()
+    const client = await connectReady(port)
+    const sessionId = SessionId('followed-page-lifecycle')
+    const requests: GenerateOptions[] = []
+    ctx.on('llm/stream', async function* (request) {
+      requests.push(request)
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Read the current page.' } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+    })
+
+    const followPage = async (id: string, snapshot: string): Promise<void> => {
+      send(client.ws, {
+        t: 'rpc', id, method: BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD,
+        payload: { sessionId, snapshot },
+      })
+      await waitFor(() => client.frames.some(frame => frame.t === 'rpc.result' && frame.id === id))
+      expect(client.frames.find(frame => frame.t === 'rpc.result' && frame.id === id)).toMatchObject({ ok: true })
+    }
+
+    // This snapshot arrives before async creation publishes the Agent. The
+    // bridge's real session-start listener must flush it into the new inbox.
+    await followPage('before-create', 'Page: provisional tab')
+    const agent = await ctx.agentLoop.create(sessionId, { provider: 'test', model: 'test' })
+    expect(ctx.agents.get(sessionId)).toBe(agent)
+    expect(agent.inbox.nextStep).toHaveLength(1)
+    expect(agent.inbox.nextStep[0]?.content).toContainEqual({ type: 'text', text: expect.stringContaining('provisional tab') })
+
+    const steering = createUserMessage({
+      content: [{ type: 'text', text: 'Keep my page selection.' }], source: { kind: 'human' },
+    })
+    agent.inbox.append('next-step', steering)
+    await followPage('live-page', 'Page: current tab')
+
+    expect(agent.status).toBe('idle')
+    expect(requests).toHaveLength(0)
+    expect(agent.inbox.nextStep).toHaveLength(2)
+    expect(agent.inbox.nextStep[0]?.id).toBe(steering.id)
+    expect(JSON.stringify(agent.inbox.nextStep)).not.toContain('provisional tab')
+    expect(agent.session.snapshotEvents().some(event => event.type === 'agent/inbox/spliced'
+      && event.data.outcome === 'canceled')).toBe(true)
+
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Summarize this page.' }], source: { kind: 'human' },
+    }))
+    await agent.whenIdle()
+
+    expect(requests).toHaveLength(1)
+    expect(JSON.stringify(requests[0]?.messages)).toContain('current tab')
+    expect(JSON.stringify(requests[0]?.messages)).not.toContain('provisional tab')
+    expect(agent.inbox.nextStep).toHaveLength(0)
+    client.ws.close()
+  })
+
   it('boots the bridge, authenticates over a real socket, and drives real gateway RPCs', { timeout: 60_000 }, async () => {
     const { ctx, port } = await loadComposition()
 

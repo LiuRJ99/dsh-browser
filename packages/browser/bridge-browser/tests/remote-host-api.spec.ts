@@ -48,7 +48,63 @@ function harness(options: {
   return { api: createRemoteHostApi(gateway, connection), invoke, open, fetch }
 }
 
-describe('dsh 0.1.2 Remote Host adapter', () => {
+describe('dsh 0.1.5 Remote Host adapter', () => {
+  it('preserves V3 durable streams and orders reconnect baselines before transient frames without advancing the durable cursor', async () => {
+    const baseline = {
+      revision: 2,
+      activeAttempt: {
+        attemptId: 'attempt-1', turn: 1, step: 0, startedAfterSeq: 8, nextIndex: 1,
+        stream: [{ type: 'text-chunks', time0: 10, index: 0, dt: [], texts: ['Hello'] }],
+      },
+    }
+    const previousMessage = {
+      type: 'assistant/message', seq: 8, time: 9, surfaceOp: 'append',
+      data: {
+        turn: 0, step: 0,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Previous' }] },
+        stream: [{ type: 'text-chunks', time0: 8, index: 0, dt: [], texts: ['Previous'] }],
+      },
+    }
+    const chunk = {
+      type: 'chunk', attemptId: 'attempt-1', revision: 3, index: 1, time: 11,
+      chunk: { type: 'text-delta', index: 0, text: ' world' },
+    }
+    const { api, invoke } = harness({
+      invoke: async () => ({ records: [], hasMore: false }),
+      open: async (endpoint, _payload, signal) => ({
+        async *[Symbol.asyncIterator]() {
+          if (endpoint === '$events') yield { type: 'ready', clientId: 'client-1' }
+          else {
+            yield { type: 'snapshot', cursor: 8, records: [{ type: 'event', event: previousMessage }],
+              hasMore: true, assistantStream: baseline }
+            yield { type: 'assistant-stream', frame: chunk }
+          }
+          await abortWait(signal)
+        },
+      }),
+    })
+    const abort = new AbortController()
+    const events = api.events(abort.signal)[Symbol.asyncIterator]()
+    const opening = events.next()
+    await expect(api.call(call('session.history', { sessionId: 'session-1' }))).resolves.toEqual({
+      ok: true,
+      value: { events: [{ event: previousMessage }], hasMore: true, assistantStream: baseline, snapshotId: expect.any(String) },
+    })
+    await expect(opening).resolves.toMatchObject({ value: {
+      method: 'session/assistant-stream', payload: { sessionId: 'session-1', frame: { type: 'snapshot', baseline } },
+    } })
+    await expect(events.next()).resolves.toMatchObject({ value: {
+      method: 'session/assistant-stream', payload: { sessionId: 'session-1', frame: chunk },
+    } })
+    await api.call(call('session.history', { sessionId: 'session-1', beforeSeq: 5 }))
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      namespace: 'session', method: 'page',
+      args: { request: { address: { kind: 'session', sessionId: 'session-1' }, throughSeq: 8, beforeSeq: 5 } },
+    }))
+    abort.abort()
+    await events.return?.()
+  })
+
   it('maps unary extension calls to exact Typert namespaces and named args', async () => {
     const { api, invoke } = harness({
       invoke: async ({ namespace, method }) => {
@@ -181,6 +237,7 @@ describe('dsh 0.1.2 Remote Host adapter', () => {
         request: {
           address: { kind: 'session', sessionId: 'session-1' },
           maxMessages: 2,
+          assistantStream: true,
         },
       },
     }, expect.any(AbortSignal))
@@ -212,6 +269,7 @@ describe('dsh 0.1.2 Remote Host adapter', () => {
         request: {
           address: { kind: 'session', sessionId: 'session-one-shot' },
           maxMessages: 12,
+          assistantStream: true,
         },
       },
     }, expect.any(AbortSignal))
@@ -279,7 +337,7 @@ describe('dsh 0.1.2 Remote Host adapter', () => {
       },
     })
     expect(open).toHaveBeenCalledWith('session/follow', {
-      args: { request: { address: { kind: 'session', sessionId: 'session-1' } } },
+      args: { request: { address: { kind: 'session', sessionId: 'session-1' }, assistantStream: true } },
     }, expect.any(AbortSignal))
     expect(invoke).toHaveBeenCalledOnce()
     const pageArgs = invoke.mock.calls[0]?.[0]?.args as { request: { throughSeq: number } }

@@ -4,7 +4,8 @@
  * The extension captures the page immediately after the user chooses to
  * follow it. A live Agent receives that snapshot at once; a deferred session
  * keeps only its newest snapshot until `agent/session-start` publishes the
- * Agent. Injection deliberately does not wake an idle Agent — the snapshot is
+ * Agent. Live inboxes also keep only the newest unclaimed browser snapshot.
+ * Injection deliberately does not wake an idle Agent — the snapshot is
  * claimed together with the user's next message.
  *
  * @module
@@ -37,6 +38,18 @@ export function createBrowserSnapshotMessage(snapshot: string): UserMessage {
   })
 }
 
+/** Supersede pending tab context through the durable Inbox command surface. */
+function injectLatestSnapshot(agent: Agent, snapshot: string): void {
+  for (const message of agent.inbox.nextStep) {
+    if (message.source.kind === 'plugin'
+      && message.source.plugin === BROWSER_CONTEXT_PLUGIN
+      && message.source.form === 'snapshot') {
+      agent.inbox.remove(message.id)
+    }
+  }
+  agent.inject(createBrowserSnapshotMessage(snapshot))
+}
+
 /** Deliver followed-page snapshots to live or not-yet-materialized Agents. */
 export class BrowserContextInjector {
   private readonly pending = new Map<string, string>()
@@ -55,7 +68,7 @@ export class BrowserContextInjector {
     const agent = this.agents.get(sessionId as Parameters<AgentRegistry['get']>[0])
     if (agent !== undefined) {
       this.pending.delete(sessionId)
-      agent.inject(createBrowserSnapshotMessage(snapshot))
+      injectLatestSnapshot(agent, snapshot)
       return 'injected'
     }
 
@@ -75,7 +88,7 @@ export class BrowserContextInjector {
     const sessionId = String(agent.id)
     const snapshot = this.pending.get(sessionId)
     if (snapshot === undefined) return false
-    agent.inject(createBrowserSnapshotMessage(snapshot))
+    injectLatestSnapshot(agent, snapshot)
     this.pending.delete(sessionId)
     return true
   }

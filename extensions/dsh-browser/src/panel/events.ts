@@ -23,9 +23,14 @@ export interface Row {
 /** Minimal view of a SessionEvent (payload in `data`). */
 export interface SessionEventView {
   type: string
+  seq?: number
+  surfaceOp?: unknown
   data?: {
     content?: unknown
-    message?: { content?: unknown }
+    source?: { kind?: string }
+    message?: { content?: unknown; source?: { kind?: string } }
+    turn?: number
+    step?: number
     name?: string
     arguments?: string
     title?: unknown
@@ -140,9 +145,10 @@ export function rowFromEvent(event: SessionEventView): Row | null {
       // dsh 每轮把运行时常量上下文作为 source.kind='plugin' 的 user/message
       // 记入日志（如 <system-reminder> 注入内容）——它们不是用户消息，
       // 渲染会污染对话流，必须跳过。
-      const source = (event.data as { source?: { kind?: string } } | undefined)?.source
+      const message = event.data?.message ?? event.data
+      const source = message?.source
       if (source?.kind !== 'user') return null
-      const blocks = event.data?.content
+      const blocks = message?.content
       const text = textFromBlocks(blocks)
       const images = imageRefsFromBlocks(blocks)
       return text.trim() === '' && images.length === 0

@@ -2,16 +2,16 @@
  * File-level removal of one session's durable storage under the dsh home.
  *
  * The gateway exposes no session.delete, so the bridge performs the removal
- * itself: archive first (index update via `workspace.archiveSession`, done by
- * the caller), then this module deletes the session directories. Strictly
- * defensive: session ids are validated against the persisted shape, only
- * exact-name directories two levels below the sessions root are removed, and
+ * itself: this module archives the session under exclusive write ownership,
+ * then removes its durable data while retaining the kernel lock's pathname.
+ * Session ids are validated against the persisted shape, only data within
+ * exact-name directories two levels below the sessions root is removed, and
  * running sessions are refused before anything touches the disk.
  *
  * @module @yuxianglin/dsh-bridge-browser/src/session-purge
  */
 
-import { readdir, rm } from 'node:fs/promises'
+import { lstat, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 /** Stable failure codes surfaced to the panel. Open set: callers must tolerate growth. */
@@ -22,14 +22,17 @@ export class SessionPurgeError extends Error {
   constructor(
     readonly code: SessionPurgeErrorCode,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.name = 'SessionPurgeError'
   }
 }
 
 /** Persisted session ids are `session-` plus one lowercase UUID. */
 const SESSION_ID_PATTERN = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+/** POSIX flock is attached to this inode; unlinking it defeats exclusion. */
+const SESSION_LOCK_FILENAME = 'session.lock'
 
 /** Dependencies purging needs from the plugin. */
 export interface SessionPurgeDeps {
@@ -37,6 +40,15 @@ export interface SessionPurgeDeps {
   sessionsRoot: string
   /** Session ids currently running; purging any of these is refused. */
   runningSessionIds: ReadonlySet<string>
+  /**
+   * Claim the runtime's exclusive write ownership (including its kernel lock).
+   * The returned handle must remain held until removal finishes. Opening a
+   * read handle, checking for a lock file, or checking only Agent status does
+   * not provide exclusion: idle Agents and other processes can own the log.
+   */
+  acquireOwnership(sessionId: string): Promise<{ close(): Promise<void> }>
+  /** Archive while the durable session still exists and exclusive ownership is held. */
+  archiveSession(sessionId: string): Promise<void>
 }
 
 /**
@@ -55,9 +67,8 @@ export function assertPurgeableSessionId(sessionId: string): string {
 }
 
 /**
- * Permanently delete every durable directory of one session. Idempotent over
- * multiple workspaces: each workspace directory may hold its own copy of the
- * session, and all of them are removed.
+ * Permanently delete a session's data, keeping its directory and lock inode.
+ * The runtime refuses ambiguous duplicate session identities across workspaces.
  * @param deps - root and running-set inputs.
  * @param sessionId - validated session id.
  * @returns nothing; throws {@link SessionPurgeError} on refusal or failure.
@@ -82,21 +93,62 @@ export async function purgeSessionFiles(deps: SessionPurgeDeps, sessionId: strin
     // dot segments, so the joined segment cannot escape the workspace dir.
     const candidate = path.join(deps.sessionsRoot, workspace, sessionId)
     try {
-      await readdir(candidate)
-      targets.push(candidate)
-    } catch {
-      // Absent in this workspace: nothing to remove there.
+      if (!(await lstat(candidate)).isDirectory()) continue
+      const entries = await readdir(candidate)
+      if (entries.some(entry => entry !== SESSION_LOCK_FILENAME)) targets.push(candidate)
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new SessionPurgeError('internal', `could not inspect "${candidate}": ${String(error)}`, { cause: error })
+      }
     }
   }
 
   if (targets.length === 0) {
     throw new SessionPurgeError('not-found', `no durable storage found for session "${sessionId}"`)
   }
-  for (const target of targets) {
+  let ownership: { close(): Promise<void> }
+  try {
+    ownership = await deps.acquireOwnership(sessionId)
+  } catch (error: unknown) {
+    // Match the public error identity across independently loaded runtime
+    // copies without depending on a private JSONL lock implementation.
+    if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
+      throw new SessionPurgeError(
+        'running',
+        'session is still owned by a runtime; release the session or restart that runtime, then retry deletion',
+      )
+    }
+    throw new SessionPurgeError('internal', `could not acquire exclusive session ownership: ${String(error)}`)
+  }
+  let failure: unknown
+  let archived = false
+  try {
+    // The public archive API checks existence. Calling it after deletion
+    // succeeds only accidentally when its header cache already knows this id.
+    await deps.archiveSession(sessionId)
+    archived = true
+    for (const target of targets) {
+      if (!(await lstat(target)).isDirectory()) throw new Error(`session directory changed: ${target}`)
+      // Re-scan after write-open: opening an old log may materialize V3.
+      for (const entry of await readdir(target)) {
+        if (entry === SESSION_LOCK_FILENAME) continue
+        await rm(path.join(target, entry), { recursive: true, force: true })
+      }
+    }
+  } catch (error: unknown) {
+    failure = new SessionPurgeError('internal', archived
+      ? `session was archived, but durable cleanup failed: ${String(error)}`
+      : `could not archive session; durable data was preserved: ${String(error)}`, { cause: error })
+  } finally {
     try {
-      await rm(target, { recursive: true, force: true })
+      await ownership.close()
     } catch (error: unknown) {
-      throw new SessionPurgeError('internal', `could not remove "${target}": ${String(error)}`)
+      failure = failure === undefined
+        ? new SessionPurgeError('internal', `session was archived and cleared, but ownership release failed: ${String(error)}`, { cause: error })
+        : new SessionPurgeError('internal', `${String(failure)}; ownership release also failed: ${String(error)}`, {
+          cause: new AggregateError([failure, error], 'session purge and ownership release failed'),
+        })
     }
   }
+  if (failure !== undefined) throw failure
 }

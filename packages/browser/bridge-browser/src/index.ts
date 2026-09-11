@@ -5,7 +5,7 @@
  * The bridge mounts its own upgrade route (`/ext/bridge`) on the host
  * webserver, OUTSIDE the /api trust fence — so it brings its own bearer-token
  * authentication (first frame `hello` within HELLO_TIMEOUT_MS). Extension
- * calls, Session streams, and Host waterfalls use dsh 0.1.2's Typert Gateway
+ * calls, Session streams, and Host waterfalls use dsh 0.1.5's Typert Gateway
  * and Connection services.
  * Tools execute by dispatching
  * `tool.call` frames to the connected extension, which performs the action in
@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-attachment'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { BridgeServer } from './server.ts'
@@ -137,11 +138,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const gateway = ctx.get('typertGateway') as unknown as GatewayCandidate | undefined
   const connection = ctx.get('connection') as unknown as HostConnectionLike | undefined
   if (gateway === undefined || !hasRemoteWireStream(gateway)) {
-    throw new Error('bridge-browser: dsh 0.1.2-rc.1 or a compatible newer runtime is required (Gateway wireStream unavailable)')
+    throw new Error('bridge-browser: dsh 0.1.5-rc.2 or a compatible newer runtime is required (Gateway wireStream unavailable)')
   }
   if (connection === undefined) throw new Error('bridge-browser: dsh connection service is required')
   const tokenRes = await resolveToken(resolved.token)
-  await ensureRemoteEventSource(ctx, gateway)
   mountBridge(ctx, resolved, tokenRes, createRemoteHostApi(gateway, connection))
 }
 
@@ -184,10 +184,29 @@ function mountBridge(
         }
       }
     } catch {
-      // Guard is best-effort: an unavailable listing must not block deletion,
-      // because the panel already refuses running rows and archives first.
+      // Listing is advisory; the required exclusive persistence handle below
+      // protects both active and idle sessions, including in other processes.
     }
-    const deps: SessionPurgeDeps = { sessionsRoot: SESSIONS_ROOT, runningSessionIds }
+    const deps: SessionPurgeDeps = {
+      sessionsRoot: SESSIONS_ROOT,
+      runningSessionIds,
+      acquireOwnership: async (id) => {
+        const persistence = ctx.get('sessionPersistence')
+        if (persistence === undefined) {
+          throw new Error('browser bridge: session persistence is required to safely purge a session')
+        }
+        return persistence.open(id as Parameters<typeof persistence.open>[0], 'write')
+      },
+      archiveSession: async (id) => {
+        const archived = await api.call({
+          rpcId: randomUUID(),
+          method: 'workspace.archiveSession',
+          payload: { sessionId: id },
+          signal: new AbortController().signal,
+        })
+        if (!archived.ok) throw new Error(archived.error.message)
+      },
+    }
     await purgeSessionFiles(deps, sessionId)
   }
 
@@ -265,32 +284,4 @@ function hasRemoteWireStream(gateway: GatewayCandidate): gateway is TypertGatewa
   return gateway.wireStream !== undefined
     && typeof gateway.wireStream.open === 'function'
     && typeof gateway.wireStream.failure === 'function'
-}
-
-/**
- * TEMPORARY 0.1.2-rc.1 packaging workaround.
- *
- * The rc.1 web profile lists api-remotes but can leave its `$events` source
- * unregistered. Remove this function, its call above, and the direct
- * dsh-api-remotes dependency once the profile reliably owns registration.
- */
-async function ensureRemoteEventSource(ctx: Context, gateway: TypertGatewayLike): Promise<void> {
-  const controller = new AbortController()
-  let iterator: AsyncIterator<unknown> | undefined
-  try {
-    const source = await gateway.wireStream.open('$events', { args: {} }, controller.signal)
-    iterator = source[Symbol.asyncIterator]()
-    const first = await iterator.next()
-    if (!first.done && isRecord(first.value) && first.value.type === 'ready') return
-    throw new TypeError('dsh $events stream did not begin with a ready frame')
-  } catch (error: unknown) {
-    const failure = gateway.wireStream.failure(error)
-    if (failure.code !== 'gateway/service-unavailable') throw error
-  } finally {
-    controller.abort(new Error('dsh $events readiness probe completed'))
-    await iterator?.return?.()
-  }
-
-  const remoteAssembly = await import('@deepseek-ai/dsh-api-remotes')
-  remoteAssembly.apply(ctx)
 }
