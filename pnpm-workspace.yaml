@@ -3,6 +3,10 @@ packages:
   - extensions/*
   - packages/*/*
 
+# dsh release lines carry incompatible branded peer types. Keep resolution
+# explicit so rc.2 ApiProxy packages never receive 0.1.2 Remote providers.
+autoInstallPeers: false
+
 # dsh 运行时与扩展构建依赖这些受信任包的安装脚本。
 allowBuilds:
   '@deepseek-ai/dsh-subprocess-local': true

@@ -67,6 +67,7 @@ import {
 import { TransientEventCache } from './transient-events.ts'
 import {
   TabAffinityController,
+  isTabAffinityDecision,
   type AffinityTab,
   type TabAffinityDecision,
 } from './tab-affinity.ts'
@@ -162,7 +163,7 @@ const STORAGE_KEY = 'dshSettings'
 const TAB_AFFINITY_STORAGE_KEY = 'dshTabAffinity'
 
 type StoredTabAffinity =
-  | { controlledTabId: number; keptActiveTabId?: number; sessionTabs?: Record<string, AffinityTab>; focusedSessionId?: string }
+  | { controlledTabId: number; keptActiveTabId?: number; pinned?: true; sessionTabs?: Record<string, AffinityTab>; focusedSessionId?: string }
   | { lost: true; sessionTabs?: Record<string, AffinityTab>; focusedSessionId?: string }
 
 let settings: Settings = { ...SETTINGS_DEFAULTS }
@@ -543,6 +544,7 @@ function storedAffinity(): StoredTabAffinity | null {
       ...(state.status === 'background' && state.active !== null
         ? { keptActiveTabId: state.active.tabId }
         : {}),
+      ...(state.pinned ? { pinned: true as const } : {}),
       ...(hasSessionTabs ? { sessionTabs } : {}),
       ...focus,
     }
@@ -571,8 +573,12 @@ function observeActiveSummary(summary: AffinityTab): void {
   if (!tabAffinity.observeActive(summary)) return
   const state = tabAffinity.snapshot()
   const activeTabChanged = previousActiveTabId !== summary.tabId
+  // `keep-always` is an explicit per-binding choice, so its pin wins over the
+  // global auto-follow preference. A controlled-tab loss clears the pin first,
+  // allowing the configured recovery path to run again.
   if (activeTabChanged
     && settings.autoFollowActiveTab
+    && !state.pinned
     && (state.status === 'handoff' || state.status === 'lost')) {
     automaticallyFollowActiveTab(state)
     return
@@ -600,7 +606,10 @@ function cancelTabAffinityWork(): void {
 
 /** Rebind to the active tab after the user explicitly enabled auto-follow. */
 function automaticallyFollowActiveTab(state: ReturnType<typeof tabAffinity.snapshot> = tabAffinity.snapshot()): void {
-  if ((state.status !== 'handoff' && state.status !== 'lost') || state.active === null) return
+  // A specific `keep-always` choice outranks the global auto-follow setting.
+  // The pin is cleared when the controlled tab is rebound or closed, so this
+  // guard cannot strand a lost binding permanently.
+  if (state.pinned || (state.status !== 'handoff' && state.status !== 'lost') || state.active === null) return
   const sessionId = tabAffinity.focusedSession() ?? undefined
   const previousControlledTabId = state.controlled?.tabId
   cancelTabAffinityWork()
@@ -659,6 +668,7 @@ async function restoreTabAffinity(): Promise<void> {
         ...(typeof keptActiveTabId === 'number' && Number.isInteger(keptActiveTabId) && keptActiveTabId >= 0
           ? { keptActiveTabId }
           : {}),
+        ...((candidate as { pinned?: unknown }).pinned === true ? { pinned: true as const } : {}),
         ...(typeof sessionTabs === 'object' && sessionTabs !== null ? { sessionTabs } : {}),
         ...focus,
       }
@@ -704,6 +714,9 @@ async function restoreTabAffinity(): Promise<void> {
     tabAffinity.restoreLost()
   }
 
+  // Restore the pin before syncing the active tab: otherwise the sync would
+  // surface a handoff prompt for a switch the user already said not to ask about.
+  if (record !== null && 'pinned' in record && record.pinned === true) tabAffinity.restorePinned()
   await syncActiveTab()
   if (record !== null && 'keptActiveTabId' in record) {
     const state = tabAffinity.snapshot()
@@ -798,14 +811,18 @@ function affinityFailure(kind: 'handoff' | 'lost' | 'missing'): ToolAnswer {
 /** Resolve one stable tab target without allowing a manual switch to drift it. */
 async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'windowId'> | ToolAnswer> {
   await affinityReady
-  if (settings.autoFollowActiveTab && sessionId === undefined) {
+  // Do not let the global auto-follow setting override an explicit
+  // `keep-always` pin. The pinned binding remains the sole target until the
+  // user chooses `ask-again`, follows the active tab, or changes the binding.
+  if (settings.autoFollowActiveTab && sessionId === undefined && !tabAffinity.snapshot().pinned) {
     try {
       const activeTab = await syncActiveTab()
       if (activeTab !== undefined) {
         const summary = summarizeTab(activeTab)
         if (summary !== null) {
-          const currentTab = tabAffinity.snapshot().controlled
-          if (currentTab === null || currentTab.tabId !== activeTab.id) {
+          const currentState = tabAffinity.snapshot()
+          const currentTab = currentState.controlled
+          if (!currentState.pinned && (currentTab === null || currentTab.tabId !== activeTab.id)) {
             tabAffinity.rebindActive(summary)
             persistTabAffinity()
             broadcastTabAffinity()
@@ -1607,8 +1624,7 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       case 'tab-affinity.response': {
         const response = message as { revision?: unknown; decision?: unknown; sessionId?: unknown }
-        if (typeof response.revision !== 'number'
-          || (response.decision !== 'keep' && response.decision !== 'follow')) break
+        if (typeof response.revision !== 'number' || !isTabAffinityDecision(response.decision)) break
         const sid = typeof response.sessionId === 'string' ? response.sessionId : undefined
         const decision = resolveTabAffinityResponse({
           revision: response.revision,

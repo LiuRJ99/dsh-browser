@@ -81,6 +81,7 @@ $s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/ds
 
 * **Explicit Tab Attachment (`browser_attach_tab`)**: introduces `browser_attach_tab`, enabling primary sessions and autonomous subagents to attach directly to existing browser tabs by `tabId` without forcing new tabs open, enabling seamless multi-session tab reuse and collaboration.
 * **Per-Session Dedicated Browser Tabs**: supports binding dedicated tabs per DSH session, ensuring parallel sessions operate in isolated tabs with independent navigation and state.
+* **Pinned Handoff Preference**: choosing **Stay & stop asking** pins the already-controlled tab; this explicit per-binding choice takes precedence over the global `autoFollowActiveTab` preference until the panel's **Ask on tab switch** action or another binding change clears it.
 * **Service Worker Tool Routing & Resilience**: tab management tools route directly in the background service worker; calling `browser_list_tabs` on uninjectable pages (such as `chrome://` or webstore URLs) resolves safely without errors.
 
 ### 3. Memory Governance & Bridge Stability (Key in v0.1.5)

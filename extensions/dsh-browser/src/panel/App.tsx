@@ -333,7 +333,9 @@ function TabAffinityBanner({
     ? copy.tabHandoff.lostBody
     : handoff
       ? copy.tabHandoff.questionBody(controlled, active)
-      : copy.tabHandoff.backgroundBody(active)
+      : state.pinned
+        ? copy.tabHandoff.pinnedBody(active)
+        : copy.tabHandoff.backgroundBody(active)
 
   return (
     <section className={`tab-affinity ${state.status}`} role={handoff || lost ? 'alert' : 'status'}>
@@ -358,6 +360,16 @@ function TabAffinityBanner({
         {state.active !== null && (
           <button className="follow" onClick={() => onDecision('follow')}>
             {lost ? copy.tabHandoff.useCurrent : handoff ? copy.tabHandoff.follow : copy.tabHandoff.followCurrent}
+          </button>
+        )}
+        {handoff && (
+          <button className="keep-always" onClick={() => onDecision('keep-always')}>
+            {copy.tabHandoff.keepAlways}
+          </button>
+        )}
+        {!handoff && !lost && state.pinned && (
+          <button className="keep-always" onClick={() => onDecision('ask-again')}>
+            {copy.tabHandoff.askAgain}
           </button>
         )}
       </div>
@@ -560,6 +572,8 @@ export function App(): React.JSX.Element {
   const [stopping, setStopping] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [uiScale, setUiScale] = useState(1)
+  const uiScaleRef = useRef(1)
+  const uiScaleChosenRef = useRef(false)
   const [approvalQueue, setApprovalQueue] = useState<ApprovalRequest[]>([])
   const [tabAffinity, setTabAffinity] = useState<TabAffinityState | null>(null)
   const [trustedOriginInput, setTrustedOriginInput] = useState('')
@@ -643,15 +657,23 @@ export function App(): React.JSX.Element {
     setQuestionSubmissions(updated)
   }
 
+  // Text size: seed the stylesheet from storage, but never let a late initial
+  // read undo a choice the user made while that read was in flight.
   useEffect(() => {
     void loadUiScale().then((scale) => {
+      if (uiScaleChosenRef.current) return
+      uiScaleRef.current = scale
       setUiScale(scale)
       applyUiScale(scale)
     })
   }, [])
 
+  // Resolve the next step against a ref so a fast double-click cannot compute
+  // both changes from the same stale render.
   function changeUiScale(direction: 1 | -1): void {
-    const next = stepUiScale(uiScale, direction)
+    uiScaleChosenRef.current = true
+    const next = stepUiScale(uiScaleRef.current, direction)
+    uiScaleRef.current = next
     setUiScale(next)
     applyUiScale(next)
     saveUiScale(next)

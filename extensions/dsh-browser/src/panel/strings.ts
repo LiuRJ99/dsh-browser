@@ -40,9 +40,12 @@ export interface PanelCopy {
     questionTitle: string
     questionBody: (controlled: string, active: string) => string
     keep: string
+    keepAlways: string
     follow: string
     backgroundTitle: (controlled: string) => string
     backgroundBody: (active: string) => string
+    pinnedBody: (active: string) => string
+    askAgain: string
     followCurrent: string
     lostTitle: string
     lostBody: string
@@ -260,9 +263,12 @@ const EN: PanelCopy = {
     questionTitle: 'Follow your current page?',
     questionBody: (controlled, active) => `It is still bound to “${controlled}”, while you moved to “${active}”. Browser actions are paused until you choose.`,
     keep: 'Stay on original',
+    keepAlways: 'Stay & stop asking',
     follow: 'Follow current page',
     backgroundTitle: () => 'Assistant stays on the original page',
     backgroundBody: (active) => `You are viewing “${active}”. Future browser actions still run on the original page.`,
+    pinnedBody: (active) => `You are viewing “${active}”. Future browser actions still run on the original page, and switching tabs will not ask again.`,
+    askAgain: 'Ask on tab switch',
     followCurrent: 'Follow current page',
     lostTitle: 'The controlled tab was closed',
     lostBody: 'Browser actions are paused to avoid operating the wrong page.',
@@ -480,9 +486,12 @@ const ZH: PanelCopy = {
     questionTitle: '助手要跟随当前页面吗？',
     questionBody: (controlled, active) => `助手仍绑定“${controlled}”，你刚切到“${active}”。选择前，浏览器操作会暂停。`,
     keep: '留在原页面',
+    keepAlways: '留在原页面并不再询问',
     follow: '跟随当前页面',
     backgroundTitle: () => '助手仍在原页面',
     backgroundBody: (active) => `你正在查看“${active}”，后续浏览器操作仍会在原页面执行。`,
+    pinnedBody: (active) => `你正在查看“${active}”，后续浏览器操作仍会在原页面执行；切换标签页时不会再询问。`,
+    askAgain: '切换标签页时重新询问',
     followCurrent: '改为跟随当前页',
     lostTitle: '受控标签页已关闭',
     lostBody: '为避免操作错页，浏览器操作已暂停。',

@@ -115,6 +115,7 @@ describe('panel protocol', () => {
       status: 'handoff',
       controlled: { tabId: 1, windowId: 2, title: 'Original', url: 'https://original.example/' },
       active: { tabId: 3, windowId: 2, title: 'Current', url: 'https://current.example/' },
+      pinned: false,
     }
 
     receive?.({ type: 'tab-affinity', state })

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import {
+  isTabAffinityDecision,
   TabAffinityController,
   type AffinityTab,
 } from '../src/background/tab-affinity.ts'
@@ -10,6 +11,15 @@ function tab(tabId: number, title = `Tab ${tabId}`): AffinityTab {
 }
 
 describe('TabAffinityController', () => {
+  it('validates every supported handoff decision at the message boundary', () => {
+    expect(isTabAffinityDecision('keep')).toBe(true)
+    expect(isTabAffinityDecision('follow')).toBe(true)
+    expect(isTabAffinityDecision('keep-always')).toBe(true)
+    expect(isTabAffinityDecision('ask-again')).toBe(true)
+    expect(isTabAffinityDecision('ignore')).toBe(false)
+    expect(isTabAffinityDecision(undefined)).toBe(false)
+  })
+
   it('binds the first tool target and follows metadata updates in place', () => {
     const affinity = new TabAffinityController()
     affinity.observeActive(tab(1))
@@ -51,6 +61,163 @@ describe('TabAffinityController', () => {
 
     affinity.observeActive(tab(3))
     expect(affinity.snapshot().status).toBe('handoff')
+  })
+
+  it('stops prompting on later tab switches after keep-always', () => {
+    const affinity = new TabAffinityController()
+    affinity.observeActive(tab(1))
+    affinity.bindInitial(tab(1))
+    affinity.observeActive(tab(2))
+
+    const handoff = affinity.snapshot()
+    expect(affinity.decide('keep-always', handoff.revision - 1)).toBe(false)
+    expect(affinity.decide('keep-always', handoff.revision)).toBe(true)
+    expect(affinity.snapshot()).toMatchObject({ status: 'background', pinned: true, controlled: { tabId: 1 } })
+
+    affinity.observeActive(tab(3))
+    expect(affinity.snapshot()).toMatchObject({ status: 'background', pinned: true, controlled: { tabId: 1 } })
+    expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 1 } })
+
+    // Returning to the controlled tab and leaving again must still not prompt.
+    affinity.observeActive(tab(1))
+    expect(affinity.snapshot()).toMatchObject({ status: 'following', pinned: true })
+    affinity.observeActive(tab(4))
+    expect(affinity.snapshot().status).toBe('background')
+  })
+
+  it('drops the keep-always pin whenever the binding changes', () => {
+    const followed = new TabAffinityController()
+    followed.observeActive(tab(1))
+    followed.bindInitial(tab(1))
+    followed.observeActive(tab(2))
+    followed.decide('keep-always', followed.snapshot().revision)
+    followed.observeActive(tab(3))
+    expect(followed.decide('follow', followed.snapshot().revision)).toBe(true)
+    expect(followed.snapshot()).toMatchObject({ status: 'following', pinned: false, controlled: { tabId: 3 } })
+    followed.observeActive(tab(5))
+    expect(followed.snapshot().status).toBe('handoff')
+
+    const rebound = new TabAffinityController()
+    rebound.observeActive(tab(1))
+    rebound.bindInitial(tab(1))
+    rebound.observeActive(tab(2))
+    rebound.decide('keep-always', rebound.snapshot().revision)
+    rebound.rebindActive(tab(2))
+    expect(rebound.snapshot()).toMatchObject({ pinned: false, status: 'following' })
+
+    const sessionRebound = new TabAffinityController()
+    sessionRebound.bindSession('s1', tab(1))
+    sessionRebound.observeActive(tab(2))
+    sessionRebound.decide('keep-always', sessionRebound.snapshot().revision)
+    sessionRebound.bindSession('s1', tab(3))
+    expect(sessionRebound.snapshot()).toMatchObject({ pinned: false, status: 'handoff', controlled: { tabId: 3 } })
+
+    const attached = new TabAffinityController()
+    attached.bindSession('s1', tab(1))
+    attached.observeActive(tab(2))
+    attached.decide('keep-always', attached.snapshot().revision)
+    attached.attachSessionTab('s1', tab(3))
+    expect(attached.snapshot()).toMatchObject({ pinned: false, status: 'handoff', controlled: { tabId: 3 } })
+
+    const removed = new TabAffinityController()
+    removed.bindSession('s1', tab(1))
+    removed.observeActive(tab(2))
+    removed.decide('keep-always', removed.snapshot().revision)
+    removed.removeSession('s1')
+    expect(removed.snapshot()).toMatchObject({ pinned: false, status: 'lost', controlled: null })
+
+    const replaced = new TabAffinityController()
+    replaced.observeActive(tab(1))
+    replaced.bindInitial(tab(1))
+    replaced.observeActive(tab(2))
+    replaced.decide('keep-always', replaced.snapshot().revision)
+    expect(replaced.replaceTab(1, 10)).toBe(true)
+    expect(replaced.snapshot()).toMatchObject({ pinned: true, status: 'background', controlled: { tabId: 10 } })
+    replaced.observeActive(tab(3))
+    expect(replaced.snapshot().status).toBe('background')
+
+    const closed = new TabAffinityController()
+    closed.observeActive(tab(1))
+    closed.bindInitial(tab(1))
+    closed.observeActive(tab(2))
+    closed.decide('keep-always', closed.snapshot().revision)
+    closed.removeTab(1)
+    expect(closed.snapshot()).toMatchObject({ status: 'lost', pinned: false })
+  })
+
+  it('re-raises the prompt when the pin is undone, without rebinding', () => {
+    const affinity = new TabAffinityController()
+    affinity.observeActive(tab(1))
+    affinity.bindInitial(tab(1))
+    affinity.observeActive(tab(2))
+    affinity.decide('keep-always', affinity.snapshot().revision)
+    affinity.observeActive(tab(3))
+
+    const pinned = affinity.snapshot()
+    expect(affinity.decide('ask-again', pinned.revision - 1)).toBe(false)
+    expect(affinity.decide('ask-again', pinned.revision)).toBe(true)
+    expect(affinity.snapshot()).toMatchObject({
+      status: 'handoff',
+      pinned: false,
+      controlled: { tabId: 1 },
+      active: { tabId: 3 },
+    })
+    expect(affinity.resolveTarget()).toEqual({ kind: 'handoff' })
+
+    // Undoing a pin that is not set is a no-op rather than a state change.
+    expect(affinity.decide('ask-again', affinity.snapshot().revision)).toBe(false)
+  })
+
+  it('preserves a pin when focus replays the same session', () => {
+    const affinity = new TabAffinityController()
+    affinity.bindNewSession('s1', tab(1))
+    affinity.bindNewSession('s2', tab(2))
+    affinity.focusSession('s1')
+    affinity.observeActive(tab(3))
+    affinity.decide('keep-always', affinity.snapshot().revision)
+    expect(affinity.snapshot()).toMatchObject({ status: 'background', pinned: true, controlled: { tabId: 1 } })
+
+    // Session resume replays the focused session: the binding is unchanged, so
+    // the pin must survive and no revision is burned.
+    const before = affinity.snapshot()
+    expect(affinity.focusSession('s1')).toBe(false)
+    expect(affinity.snapshot()).toMatchObject({ revision: before.revision, pinned: true, status: 'background' })
+
+    // Moving focus to a session on a different tab drops the pin.
+    expect(affinity.focusSession('s2')).toBe(true)
+    expect(affinity.snapshot()).toMatchObject({ pinned: false, controlled: { tabId: 2 } })
+    expect(affinity.snapshot().revision).toBeGreaterThan(before.revision)
+  })
+
+  it('keeps a restored pin when the tab navigated while the worker was down', () => {
+    // Restart shape: the stored session snapshot carries old metadata while
+    // the live controlled tab has since navigated.
+    const affinity = new TabAffinityController()
+    affinity.restoreSessionTabs({ s1: tab(1, 'Title at bind time') })
+    affinity.restoreControlled(tab(1, 'Title after navigating'))
+    affinity.restoreFocusedSession('s1')
+    expect(affinity.restorePinned()).toBe(true)
+    affinity.observeActive(tab(2))
+    expect(affinity.snapshot()).toMatchObject({ status: 'background', pinned: true })
+
+    // Same tab id, different title/url: still the binding the user pinned.
+    affinity.focusSession('s1')
+    expect(affinity.snapshot()).toMatchObject({ pinned: true, controlled: { tabId: 1 } })
+    expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 1 } })
+  })
+
+  it('rejects a keep-always pin that has no controlled tab behind it', () => {
+    const unbound = new TabAffinityController()
+    unbound.observeActive(tab(1))
+    expect(unbound.restorePinned()).toBe(false)
+    expect(unbound.snapshot().pinned).toBe(false)
+
+    const restored = new TabAffinityController()
+    restored.restoreControlled(tab(1))
+    expect(restored.restorePinned()).toBe(true)
+    restored.observeActive(tab(2))
+    expect(restored.snapshot()).toMatchObject({ status: 'background', pinned: true })
+    expect(restored.restorePinned()).toBe(false)
   })
 
   it('supports explicit rebindActive when starting new chat', () => {
@@ -150,6 +317,21 @@ describe('TabAffinityController', () => {
     lost.observeActive(tab(5))
     expect(lost.resolveTarget()).toEqual({ kind: 'lost' })
     expect(lost.bindInitial(tab(5))).toBe(false)
+  })
+
+  it('keeps dedicated session targets independent from a global pin', () => {
+    const affinity = new TabAffinityController()
+    affinity.bindNewSession('session-1', tab(1))
+    affinity.bindNewSession('session-2', tab(2))
+    affinity.focusSession('session-1')
+    affinity.observeActive(tab(3))
+    expect(affinity.decide('keep-always', affinity.snapshot().revision)).toBe(true)
+
+    expect(affinity.resolveTarget('session-1')).toEqual({ kind: 'target', tab: tab(1) })
+    expect(affinity.resolveTarget('session-2')).toEqual({ kind: 'target', tab: tab(2) })
+    expect(affinity.allowsTarget(1, 'session-1')).toBe(true)
+    expect(affinity.allowsTarget(2, 'session-2')).toBe(true)
+    expect(affinity.allowsTarget(3, 'session-2')).toBe(false)
   })
 
   it('supports independent per-session tab affinity for concurrent sessions', () => {

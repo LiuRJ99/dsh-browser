@@ -272,7 +272,9 @@ textarea:focus-visible {
 
 .tab-affinity-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  row-gap: 6px;
   margin-top: 10px;
 }
 
@@ -311,6 +313,20 @@ textarea:focus-visible {
 .tab-affinity-actions .follow:hover {
   border-color: var(--blue-hover);
   background: var(--blue-hover);
+}
+
+/* Pin controls keep their own row so the primary handoff answers stay equal. */
+.tab-affinity-actions .keep-always {
+  flex: 1 0 100%;
+  border: 1px dashed var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+}
+
+.tab-affinity-actions .keep-always:hover {
+  border-color: #b6c0d0;
+  background: var(--surface);
+  color: var(--ink);
 }
 
 .tab-affinity.background .tab-affinity-actions {

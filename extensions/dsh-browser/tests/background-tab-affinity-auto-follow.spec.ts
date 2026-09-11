@@ -43,20 +43,26 @@ function tab(tabId: number): chrome.tabs.Tab {
 }
 
 function affinityStates(postMessage: ReturnType<typeof vi.fn>): Array<{
+  revision?: number
   status?: string
   controlled?: { tabId?: number } | null
+  pinned?: boolean
 }> {
   return postMessage.mock.calls
-    .map(([message]) => message as { type?: string; state?: { status?: string; controlled?: { tabId?: number } | null } })
+    .map(([message]) => message as { type?: string; state?: { revision?: number; status?: string; controlled?: { tabId?: number } | null; pinned?: boolean } })
     .filter((message) => message.type === 'tab-affinity')
     .map((message) => message.state ?? {})
 }
 
-function mockChrome() {
+function mockChrome(
+  autoFollowActiveTab = true,
+  storedSessionState: unknown = {},
+  initialActiveTabId = 1,
+) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
   const onActivated = chromeEvent<[{ tabId: number; windowId: number }]>()
   const onRemoved = chromeEvent<[number]>()
-  let activeTab = tab(1)
+  let activeTab = tab(initialActiveTabId)
   const get = vi.fn(async (tabId: number) => tab(tabId))
   const query = vi.fn(async () => [activeTab])
   const sendMessage = vi.fn(async (tabId: number, message: unknown) => {
@@ -82,11 +88,11 @@ function mockChrome() {
     sidePanel: { open: vi.fn(async () => {}), setPanelBehavior: vi.fn(async () => {}) },
     storage: {
       local: {
-        get: vi.fn(async () => ({ dshSettings: { autoFollowActiveTab: true } })),
+        get: vi.fn(async () => ({ dshSettings: { autoFollowActiveTab } })),
         set: vi.fn(async () => {}),
       },
       session: {
-        get: vi.fn(async () => ({})),
+        get: vi.fn(async () => storedSessionState),
         set: vi.fn(async () => {}),
         remove: vi.fn(async () => {}),
       },
@@ -162,6 +168,96 @@ describe('automatic active-tab following', () => {
     })
     expect(affinityStates(panel.postMessage).some((state) => state.status === 'handoff')).toBe(false)
     expect(chromeMock.sendMessage).toHaveBeenCalled()
+  })
+
+  it('restores a pin before syncing the active tab after a worker restart', async () => {
+    const chromeMock = mockChrome(true, {
+      dshTabAffinity: {
+        controlledTabId: 1,
+        keptActiveTabId: 2,
+        pinned: true,
+      },
+    }, 2)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    await import('../src/background/index.ts')
+
+    const panel = panelPort()
+    chromeMock.onConnect.emit(panel.port)
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'background',
+        controlled: { tabId: 1 },
+        pinned: true,
+      })
+    })
+    expect(affinityStates(panel.postMessage).some((state) => state.status === 'handoff')).toBe(false)
+    expect(affinityStates(panel.postMessage).some((state) => state.status === 'following' && state.controlled?.tabId === 2)).toBe(false)
+  })
+
+  it('does not let auto-follow override an explicit keep-always pin', async () => {
+    const chromeMock = mockChrome(false)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    await import('../src/background/index.ts')
+
+    const panel = panelPort()
+    chromeMock.onConnect.emit(panel.port)
+    await vi.waitFor(() => { expect(chromeMock.query).toHaveBeenCalled() })
+
+    panel.onMessage.emit({ type: 'session.active', sessionId: 'session-pinned', isNew: true })
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'following',
+        controlled: { tabId: 1 },
+        pinned: false,
+      })
+    })
+
+    chromeMock.activate(tab(2))
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'handoff',
+        controlled: { tabId: 1 },
+      })
+    })
+    const handoff = affinityStates(panel.postMessage).at(-1)
+    expect(handoff?.revision).toBeTypeOf('number')
+    panel.onMessage.emit({
+      type: 'tab-affinity.response',
+      revision: handoff!.revision,
+      decision: 'keep-always',
+      sessionId: 'session-pinned',
+    })
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'background',
+        controlled: { tabId: 1 },
+        pinned: true,
+      })
+    })
+
+    // Enabling the global preference after the explicit choice must not retarget.
+    panel.onMessage.emit({ type: 'settings', id: 'settings-pinned', settings: { autoFollowActiveTab: true } })
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'background',
+        controlled: { tabId: 1 },
+        pinned: true,
+      })
+    })
+    panel.postMessage.mockClear()
+
+    chromeMock.activate(tab(3))
+    await vi.waitFor(() => {
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({
+        status: 'background',
+        controlled: { tabId: 1 },
+        pinned: true,
+      })
+    })
+    expect(affinityStates(panel.postMessage).some((state) => state.status === 'following' && state.controlled?.tabId === 3)).toBe(false)
+    expect(affinityStates(panel.postMessage).some((state) => state.status === 'handoff')).toBe(false)
   })
 
   it('recovers the focused session when its controlled tab closes', async () => {

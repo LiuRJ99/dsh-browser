@@ -8,16 +8,16 @@ const require = createRequire(new URL('package.json', root))
 const manifest = JSON.parse(readFileSync(new URL('package.json', root), 'utf8'))
 const version = manifest.dependencies['@deepseek-ai/dsh']
 const lockfile = readFileSync(new URL('pnpm-lock.yaml', root), 'utf8')
+// Inspect package keys, including snapshots, without depending on pnpm's
+// private APIs or mistaking version text inside a peer suffix for a package.
 const lockedPackages = [...lockfile.matchAll(/^  '(@deepseek-ai\/dsh(?:-[^@']+)?)@([^(' :]+)[^']*':/gm)]
 assert.ok(lockedPackages.length > 0, 'no DSH package keys found in lockfile')
-for (const [, name] of lockedPackages) {
-  assert.notEqual(name, '@deepseek-ai/dsh-host-apiproxy', 'legacy ApiProxy must not be installed')
-}
-const criticalNames = new Set(['@deepseek-ai/dsh'])
 for (const [, name, resolved] of lockedPackages) {
-  if (criticalNames.has(name)) assert.equal(resolved, version, `${name}: lockfile has a different DSH release`)
+  assert.notEqual(name, '@deepseek-ai/dsh-host-apiproxy', 'legacy ApiProxy must not be installed')
+  assert.equal(resolved, version, `${name}: lockfile has a different DSH release`)
 }
 
+// Follow the same first-provider traversal as dsh-app-boot's profile fallback.
 const anchor = require.resolve('@deepseek-ai/dsh/package.json')
 const queue = [anchor]
 const providers = new Map([['@deepseek-ai/dsh', anchor]])
@@ -29,6 +29,7 @@ for (let i = 0; i < queue.length; i++) {
     if (providers.has(name)) continue
     let path
     try { path = resolve.resolve(`${name}/package.json`) } catch (error) {
+      // Other packages can hide package.json; DSH publishes its manifests.
       if (name.startsWith('@deepseek-ai/dsh') && error.code !== 'MODULE_NOT_FOUND') throw error
       continue
     }
@@ -36,22 +37,19 @@ for (let i = 0; i < queue.length; i++) {
     queue.push(path)
   }
 }
+for (const [name, path] of providers) {
+  if (!/^@deepseek-ai\/dsh(?:-|$)/.test(name)) continue
+  const data = JSON.parse(readFileSync(path, 'utf8'))
+  assert.equal(data.version, version, `${name}: runtime provider at ${path}`)
+}
 for (const name of ['dsh-session-query', 'dsh-session-projection-cache']) {
   const path = providers.get(`@deepseek-ai/${name}`)
   assert.ok(path, `${name}: missing runtime provider`)
-  const provider = JSON.parse(readFileSync(path, 'utf8'))
-  assert.equal(typeof provider.version, 'string', `${name}: runtime provider at ${path}`)
-  console.log(`${name}@${provider.version}: ${path}`)
+  console.log(`${name}@${version}: ${path}`)
 }
 const cacheName = '@deepseek-ai/dsh-session-projection-cache'
-const cacheManifest = providers.get(cacheName)
-assert.ok(cacheManifest, `${cacheName}: missing provider manifest`)
-let entry
-try {
-  entry = require.resolve(cacheName)
-} catch {
-  entry = createRequire(cacheManifest).resolve(cacheName)
-}
+assert.equal(require.resolve(`${cacheName}/package.json`), providers.get(cacheName), 'root and host must resolve the same cache')
+const entry = createRequire(providers.get(cacheName)).resolve(cacheName)
 const { default: Cache } = await import(pathToFileURL(entry).href)
 assert.equal(typeof Cache.prototype.hydratePrepared, 'function', `${entry}: hydratePrepared missing`)
 console.log('DSH runtime dependency checks passed')

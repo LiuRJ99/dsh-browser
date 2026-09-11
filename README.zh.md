@@ -81,6 +81,7 @@ $s="$env:TEMP\dsh-install.ps1"; irm https://raw.githubusercontent.com/LiuRJ99/ds
 
 * **主动标签页附着（`browser_attach_tab`）**：新增 `browser_attach_tab` 工具，支持主会话及后台 Subagent 主动根据 `tabId` 附着到已有的浏览器标签页上，无需强行打开新标签页，实现多会话协同与既有会话复用。
 * **Per-Session 专属独立标签页（Dedicated Tabs）**：支持为每个独立 DSH 会话分配与维护专属标签页，多会话并发执行浏览器任务时各自隔离操作与导航，避免相互抢占焦点。
+* **固定原页面的交接偏好**：选择「留在原页面并不再询问」会固定已经受控的标签页；这个针对具体绑定的显式选择优先于全局 `autoFollowActiveTab` 设置，直到面板中的「切换标签页时重新询问」或其他绑定变更将其解除。
 * **后台 Service Worker 路由加固**：标签页管理相关工具直接在扩展 Background Service Worker 中路由处理；在非注入页面（如浏览器设置页、扩展商店等）执行 `browser_list_tabs` 时安全静默，不抛出异常阻断流程。
 
 ### 3. 内存治理与桥接稳定性（v0.1.5 重点）
