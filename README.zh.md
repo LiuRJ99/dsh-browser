@@ -59,13 +59,13 @@ Playwright / 扩展的配对耗时比为 **1.24**（95% CI **1.16–1.34**）：
 | 发送图片 | `session.prompt` / `session.attachment` | 按宿主能力启用图片草稿、纯图片消息和持久历史预览 |
 | 引用选中内容 | 侧栏输入框 | 在页面里划选的文字会出现在输入框，随下一条消息一起发送，并带上来源与不可信内容边界 |
 
-## Fork 增强特性（v0.1.5）
+## Fork 增强特性（v0.1.6）
 
-> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，当前版本 `v0.1.5`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、内存治理、多标签页并发与权限治理进行了重点增强。
+> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，当前版本 `v0.1.6`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、内存治理、多标签页并发与权限治理进行了重点增强。
 
 ### 1. 本 Fork 安装方式
 
-使用包含最新 0.1.5 修复的安装脚本：
+使用包含最新 0.1.6 修复的安装脚本：
 
 macOS 与 Linux：
 ```sh

@@ -3,6 +3,20 @@
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.6] - 2026-09-11
+
+### Added
+
+- **标签页亲和支持「保持并不再询问」与重新询问（G5）**：`TabAffinityDecision` 扩充 `keep-always` 与 `ask-again`，状态暴露 `pinned`。显式 pin 状态优先于全局 `autoFollowActiveTab`。面板增加「留在原页面并不再询问」与「切换标签页时重新询问」中英文文案。
+- **DSH Web 桥地址设置与运行时配置（G10）**：设置面板增加独立卡片显示与配置 Bridge WebSocket URL，支持复制与运行时热更新。
+- **运行时端到端冒烟测试（G3）**：新增 `scripts/smoke-runtime.mjs` 真实冒烟（覆盖隔离 profile、token/WebSocket、session create/list/history、重启及 prepared projection）与 `scripts/check-runtime.mjs` 全域运行时断言。
+- **GitHub Actions 运行时 CI（G3）**：新增 `.github/workflows/runtime.yml` 自动化 CI 工作流，使用全新 store 验证安装与全套测试链。
+
+### Fixed
+
+- **面板字号设置竞态修复（G4）**：面板初始异步 `loadUiScale()` 增加 `uiScaleChosenRef`，避免覆盖用户已主动调整的字号设置。
+- **依赖确定性加固（G2）**：root `package.json` 补齐 30 项显式 pin，`pnpm-workspace.yaml` 配置 `autoInstallPeers: false`，杜绝依赖漂移。
+
 ## [0.1.5] - 2026-09-09
 
 ### Fixed
@@ -68,6 +82,7 @@
 
 - 首次发布：token 认证的 WebSocket 桥接插件（`@yuxianglin/dsh-bridge-browser`）与 Chrome MV3 侧栏扩展（dsh-browser-extension），提供文本化浏览器快照与受控标签页操作工具。
 
+[0.1.6]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.6
 [0.1.5]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.5
 [0.1.3]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.3
 [0.1.2]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.2

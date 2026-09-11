@@ -59,9 +59,9 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 | Send images | `session.prompt` / `session.attachment` | Host-capability-gated image drafts, image-only prompts, and durable history previews |
 | Quote a selection | side panel composer | Text you highlight in the page appears in the composer and is sent with your next message as fenced, attributed page content |
 
-## Fork Enhancements (v0.1.5)
+## Fork Enhancements (v0.1.6)
 
-> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), current version `v0.1.5`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, heap memory stabilization, dedicated session tab isolation, and improved permission governance.
+> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), current version `v0.1.6`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, heap memory stabilization, dedicated session tab isolation, and improved permission governance.
 
 ### 1. Installation from this Fork
 
