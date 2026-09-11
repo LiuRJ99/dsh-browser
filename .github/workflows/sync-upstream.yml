@@ -117,8 +117,12 @@ jobs:
           set -euo pipefail
 
           # 已有 open PR -> 只刷新正文，绝不动分支（保护人工的解冲突与试验）
-          OPEN_PR=$(gh pr list --head "$SYNC_BRANCH" --base "$TARGET_BRANCH" --state open \
+          # 显式 --repo：不要靠 gh 从 git remote 推断仓库，推断失败时会静默返回空，
+          # 于是误判成「没有 PR」而去重复创建。
+          OPEN_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --base "$TARGET_BRANCH" --state open \
             --json number --jq '.[0].number // empty')
+          echo "open PR for $SYNC_BRANCH: '${OPEN_PR}'"
           if [ -n "$OPEN_PR" ]; then
             echo "mode=refresh" >> "$GITHUB_OUTPUT"
             echo "pr_number=$OPEN_PR" >> "$GITHUB_OUTPUT"
@@ -128,11 +132,13 @@ jobs:
 
           # 同一上游 ref 若已评估并关闭过（未合并）-> 不重复提。这就是「不吸收」的记录。
           # 注意：gh --jq 输出的 body 是单行（JSON 转义过换行），所以 grep -c 可直接计数。
-          EVALUATED=$(gh pr list --head "$SYNC_BRANCH" --base "$TARGET_BRANCH" --state all \
+          EVALUATED=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --base "$TARGET_BRANCH" --state all \
             --json number,state,body \
             --jq '.[] | select(.state != "MERGED") | .body' \
             | grep -c -- "upstream-sha: $UPSTREAM_SHA" || true)
           EVALUATED="${EVALUATED:-0}"
+          echo "closed-and-not-absorbed PRs for this upstream ref: $EVALUATED"
           if [ "$EVALUATED" -gt 0 ]; then
             echo "mode=skip" >> "$GITHUB_OUTPUT"
             echo "Upstream $UPSTREAM_SHA already evaluated and not absorbed; skipping."
@@ -233,9 +239,11 @@ jobs:
           fi
 
           if [ "$MODE" = "refresh" ]; then
-            gh pr edit "$PR_NUMBER" --title "$TITLE" --body-file /tmp/pr-body.md
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --title "$TITLE" --body-file /tmp/pr-body.md
             echo "Refreshed PR #$PR_NUMBER (branch untouched)."
           else
-            gh pr create --head "$SYNC_BRANCH" --base "$TARGET_BRANCH" \
+            gh pr create --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+              --base "$TARGET_BRANCH" \
               --title "$TITLE" --body-file /tmp/pr-body.md $DRAFT_FLAG
           fi
