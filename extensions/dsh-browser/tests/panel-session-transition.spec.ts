@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import type { BridgeState } from '../src/background/bridge.ts'
 import type { PanelApi } from '../src/panel/api.ts'
+import { BRIDGE_SESSION_PURGE_METHOD, type ServerFrame } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 
 let panelApi: PanelApi
 
@@ -18,6 +19,7 @@ describe('panel session transitions', () => {
   let root: Root
   let onStatus: ((state: BridgeState, caps: null) => void) | undefined
   let onResumeHint: ((sessionId: string | null) => void) | undefined
+  let onEvent: ((frame: ServerFrame) => void) | undefined
   let rpc: Mock<(method: string, payload?: unknown) => Promise<unknown>>
 
   beforeEach(() => {
@@ -52,7 +54,7 @@ describe('panel session transitions', () => {
         await rpc(method, payload) as T,
       respond: vi.fn(async () => undefined),
       onStatus: vi.fn((callback) => { onStatus = callback; return unsubscribe }),
-      onEvent: vi.fn(() => unsubscribe),
+      onEvent: vi.fn((callback) => { onEvent = callback; return unsubscribe }),
       onApprovalRequest: vi.fn(() => unsubscribe),
       onApprovalResolved: vi.fn(() => unsubscribe),
       onTabAffinity: vi.fn(() => unsubscribe),
@@ -86,6 +88,93 @@ describe('panel session transitions', () => {
       onResumeHint?.(hint)
     })
   }
+
+  it('keeps the reconnect stream suffix when history resolves late, then shows only the durable settlement', async () => {
+    let finishHistory: ((history: unknown) => void) | undefined
+    const historyPromise = new Promise((resolve) => { finishHistory = resolve })
+    const original = rpc.getMockImplementation()!
+    rpc.mockImplementation(async (method, payload) => method === 'session.history' ? historyPromise : original(method, payload))
+    const baseline = { revision: 2, activeAttempt: {
+      attemptId: 'attempt-1', turn: 0, step: 0, startedAfterSeq: 4, nextIndex: 1,
+      stream: [{ type: 'text-chunks', index: 0, time0: 1, dt: [], texts: ['Hello'] }],
+    } }
+    await renderConnected(null)
+    const emit = (method: string, payload: unknown): void => {
+      onEvent?.({ t: 'event', frame: { rpcId: 'event-1', method, payload } })
+    }
+    await act(async () => {
+      emit('session/assistant-stream', { sessionId: 'session-current', snapshotId: 'snapshot-1', frame: { type: 'snapshot', baseline } })
+      emit('session/assistant-stream', { sessionId: 'session-current', frame: {
+        type: 'chunk', attemptId: 'attempt-1', revision: 3, index: 1, time: 2,
+        chunk: { type: 'text-delta', index: 0, text: ' world' },
+      } })
+    })
+    expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Hello world')
+    await act(async () => {
+      emit('session/event', { sessionId: 'session-current', event: {
+        type: 'assistant/message', seq: 5, surfaceOp: 'append', data: {
+          turn: 0, step: 0, message: { content: [{ type: 'text', text: 'Hello world!' }] },
+        },
+      } })
+      emit('session/assistant-stream', { sessionId: 'session-current', frame: {
+        type: 'end', attemptId: 'attempt-1', revision: 4, index: 2,
+        outcome: { kind: 'committed', seq: 5, eventType: 'assistant/message' },
+      } })
+    })
+    expect(document.querySelectorAll('.row.assistant')).toHaveLength(1)
+    expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Hello world!')
+    await act(async () => { finishHistory?.({ events: [], snapshotId: 'snapshot-1', assistantStream: baseline }) })
+    expect(document.querySelectorAll('.row.assistant')).toHaveLength(1)
+    expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Hello world!')
+  })
+
+  it('keeps a session in the picker when the Host storage lock refuses deletion', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const original = rpc.getMockImplementation()!
+    rpc.mockImplementation(async (method, payload) => {
+      if (method === BRIDGE_SESSION_PURGE_METHOD) throw new Error('session storage is locked')
+      return original(method, payload)
+    })
+    await renderConnected(null)
+    const menu = document.querySelector<HTMLButtonElement>('.session-menu-trigger')!
+    await act(async () => { menu.click() })
+    const buttons = document.querySelectorAll<HTMLButtonElement>('.session-delete')
+    expect(buttons).toHaveLength(2)
+    await act(async () => { buttons[1]!.click() })
+    expect(rpc).toHaveBeenCalledWith(BRIDGE_SESSION_PURGE_METHOD, { sessionId: 'session-saved' })
+    expect(rpc.mock.calls.some(([method]) => method === 'workspace.archiveSession')).toBe(false)
+    expect(document.querySelectorAll('.session-delete')).toHaveLength(2)
+    expect(document.querySelector('.error')?.textContent).toContain('session storage is locked')
+  })
+
+  it('waits for the matching stream baseline when a replacement history RPC arrives first', async () => {
+    await renderConnected(null)
+    const emit = (snapshotId: string, baseline: unknown): void => {
+      onEvent?.({ t: 'event', frame: { rpcId: 'stream', method: 'session/assistant-stream',
+        payload: { sessionId: 'session-current', snapshotId, frame: { type: 'snapshot', baseline } },
+      } })
+    }
+    await act(async () => { emit('opening', { revision: 0 }) })
+    const original = rpc.getMockImplementation()!
+    rpc.mockImplementation(async (method, payload) => method === 'session.history' ? {
+      snapshotId: 'replacement', assistantStream: { revision: 4 },
+      events: [{ event: { type: 'assistant/message', seq: 5, data: {
+        message: { content: [{ type: 'text', text: 'Recovered response' }] },
+      } } }],
+    } : original(method, payload))
+    await act(async () => {
+      onEvent?.({ t: 'event', frame: { rpcId: 'gap', method: 'session/assistant-stream', payload: {
+        sessionId: 'session-current', frame: {
+          type: 'chunk', attemptId: 'missing', revision: 3, index: 1,
+          chunk: { type: 'text-delta', index: 0, text: 'suffix without prefix' },
+        },
+      } } })
+    })
+    expect(rpc.mock.calls.filter(([method]) => method === 'session.history')).toHaveLength(2)
+    expect(document.querySelector('.row.assistant')).toBeNull()
+    await act(async () => { emit('replacement', { revision: 4 }) })
+    expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Recovered response')
+  })
 
   it('automatically restores only a valid contextual hint', async () => {
     const storageGet = chrome.storage.local.get as unknown as Mock

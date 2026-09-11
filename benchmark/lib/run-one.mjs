@@ -73,8 +73,11 @@ async function readPlaywrightMetrics(backend) {
 
 function waitForTurn() {
   let resolveTurn
-  const promise = new Promise((resolve) => { resolveTurn = resolve })
-  return { promise, resolve: resolveTurn }
+  let rejectTurn
+  const promise = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject })
+  // A carrier can fail while prompt admission is still awaiting its RPC.
+  void promise.catch(() => {})
+  return { promise, resolve: resolveTurn, reject: rejectTurn }
 }
 
 export async function runOne({
@@ -92,13 +95,17 @@ export async function runOne({
 
   const created = await backend.client.rpc('session.create', { cwd: workspace })
   const sessionId = created.sessionId
-  const models = await backend.client.rpc('session.models', { sessionId })
-  let selectedModel = models.current
+  const models = await backend.client.rpc('session.modelCatalog')
+  let selectedModel = models.default
   if (modelSelection !== undefined) {
     const selection = await backend.client.rpc('session.selectModel', { sessionId, ...modelSelection })
     selectedModel = selection.selected
   }
-  if (modelSelection === undefined && models.routable !== true) throw new Error(`model route is not available: ${models.current.provider}/${models.current.model}`)
+  // Establish the gap-free follower before the measured prompt so first-turn
+  // events cannot race subscription setup for either backend.
+  const opening = await backend.client.followSession(sessionId)
+  selectedModel = opening?.projections?.values?.modelSelection?.next ?? selectedModel
+  if (!models.routableProviders.includes(selectedModel.provider)) throw new Error(`model route is not available: ${selectedModel.provider}/${selectedModel.model}`)
 
   const startedEpochMs = Date.now()
   const started = performance.now()
@@ -126,18 +133,27 @@ export async function runOne({
   const turn = waitForTurn()
 
   const unsubscribe = backend.client.onFrame((frame, receivedAt) => {
+    if (frame.type === 'connection/error' && (frame.sessionId === undefined || frame.sessionId === sessionId)) {
+      turn.reject(frame.error)
+      return
+    }
     if (frame.sessionId !== sessionId) return
     try {
       if (frame.type === 'approval/requested') {
         appendEventTypeRun(eventTypeRuns, frame.type)
         observerError ??= `unexpected approval request for ${frame.toolName}`
+        turn.reject(new Error(observerError))
+        return
+      }
+      if (frame.type === 'session/assistant-stream') {
+        appendEventTypeRun(eventTypeRuns, `assistant-stream/${frame.frame.type}`)
+        if (frame.frame.type === 'chunk' && firstTokenAt === undefined && tokenDelta(frame.frame.chunk)) firstTokenAt = receivedAt
         return
       }
       if (frame.type !== 'session/event') return
       const event = frame.event
       appendEventTypeRun(eventTypeRuns, event.type)
       if (event.type === 'turn/start') turnStartedAt ??= receivedAt
-      else if (event.type === 'assistant/chunk' && firstTokenAt === undefined && tokenDelta(event.data?.chunk)) firstTokenAt = receivedAt
       else if (event.type === 'assistant/message') {
         addUsage(totals, event.data?.usage)
         const text = visibleText(event.data?.message)

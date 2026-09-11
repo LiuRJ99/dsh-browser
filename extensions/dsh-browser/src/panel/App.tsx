@@ -56,6 +56,7 @@ import {
   type ImageAttachmentLimits,
 } from './attachments.ts'
 import { imageErrorMessage } from './image-errors.ts'
+import { AssistantStreamView } from './assistant-stream.ts'
 import {
   canAcceptImageSelection,
   emptyComposerDraft,
@@ -580,6 +581,8 @@ const MessageBody = memo(function MessageBody({
 
 interface HistoryPage {
   events: { event: SessionEventView }[]
+  assistantStream?: unknown
+  snapshotId?: string
   projections?: {
     asOfSeq: number
     values: Record<string, unknown>
@@ -610,6 +613,7 @@ export function App(): React.JSX.Element {
   const [caps, setCaps] = useState<BridgeCaps | null>(null)
   const [settings, setSettings] = useState<PanelSettings | null>(null)
   const [rows, setRows] = useState<Row[]>([])
+  const [streamRow, setStreamRow] = useState<Row | null>(null)
   const [draft, setDraft] = useState<ComposerDraft<DraftImage>>(() => emptyComposerDraft())
   const input = draft.text
   const draftImages = draft.images
@@ -656,6 +660,15 @@ export function App(): React.JSX.Element {
   const sessionTransitionRef = useRef(0)
   const sessionInitializationRef = useRef(false)
   const sessionRuntimeRef = useRef(new SessionRuntimeCache())
+  const assistantStreamsRef = useRef(new Map<string, AssistantStreamView>())
+  const followSnapshotsRef = useRef(new Map<string, {
+    id: string
+    suffix: SessionEventView[]
+    applied?: true
+    overflow?: true
+  }>())
+  const pendingHistoriesRef = useRef(new Map<string, { sessionId: string; history: HistoryPage }>())
+  const streamRefreshRef = useRef(new Set<string>())
   const seqRef = useRef(0)
   const sessionRef = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -765,6 +778,11 @@ export function App(): React.JSX.Element {
         sessionRef.current = null
         setResumeHint({ ready: false, sessionId: null })
         sessionRuntimeRef.current.clear()
+        assistantStreamsRef.current.clear()
+        followSnapshotsRef.current.clear()
+        pendingHistoriesRef.current.clear()
+        streamRefreshRef.current.clear()
+        setStreamRow(null)
         setRows([])
         setDraft((current) => ({ ...current, images: [] }))
         setImageLimits(null)
@@ -825,7 +843,7 @@ export function App(): React.JSX.Element {
   // Auto-scroll to the newest row.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [rows, working])
+  }, [rows, streamRow, working])
 
   function applyImageProjection(sessionId: string, seq: number, value: unknown): void {
     if (sessionRef.current !== sessionId || !Number.isSafeInteger(seq)) return
@@ -852,6 +870,30 @@ export function App(): React.JSX.Element {
   /** Live frame handling: session events append rows; turn/end reconciles with history. */
   async function onFrame(frame: ServerFrame): Promise<void> {
     if (frame.t !== 'event') return
+    if (frame.frame.method === 'session/assistant-stream') {
+      const payload = frame.frame.payload as { sessionId?: unknown; snapshotId?: unknown; frame?: unknown } | undefined
+      if (typeof payload?.sessionId !== 'string' || typeof payload.frame !== 'object' || payload.frame === null) return
+      const sessionId = payload.sessionId
+      const stream = assistantStreamsRef.current.get(sessionId) ?? new AssistantStreamView()
+      assistantStreamsRef.current.set(sessionId, stream)
+      const value = payload.frame as { type?: unknown; baseline?: unknown }
+      if (value.type === 'snapshot' && typeof payload.snapshotId === 'string') {
+        followSnapshotsRef.current.set(sessionId, { id: payload.snapshotId, suffix: [] })
+      }
+      const update = value.type === 'snapshot' ? stream.replace(value.baseline) : stream.accept(value)
+      if (sessionId !== sessionRef.current) return
+      if (value.type === 'snapshot' && typeof payload.snapshotId === 'string') {
+        const pending = pendingHistoriesRef.current.get(payload.snapshotId)
+        // Only a matching pushed baseline may release a history response that
+        // beat it through the RPC channel. Other pending cuts may belong to a
+        // newer follower whose baseline is still queued behind this one.
+        pendingHistoriesRef.current.delete(payload.snapshotId)
+        if (pending !== undefined) applyHistory(sessionId, pending.history)
+      }
+      setStreamRow(stream.row())
+      if (update === 'rebaseline') await rebaselineStream(sessionId)
+      return
+    }
     const pendingQuestion = pendingQuestionFromFrame(frame.frame)
     if (pendingQuestion !== null) {
       sessionRuntimeRef.current.rememberQuestion(pendingQuestion)
@@ -885,6 +927,17 @@ export function App(): React.JSX.Element {
     }
     const payload = frame.frame.payload as { sessionId?: string; event?: SessionEventView } | undefined
     if (payload?.sessionId === undefined || payload.event === undefined) return
+    const followed = followSnapshotsRef.current.get(payload.sessionId)
+    if (followed !== undefined && !followed.applied && !followed.overflow) {
+      if (followed.suffix.length < 2048) followed.suffix.push(payload.event)
+      else {
+        followed.overflow = true
+        followed.suffix = []
+        void rebaselineStream(payload.sessionId)
+      }
+    }
+    const stream = assistantStreamsRef.current.get(payload.sessionId)
+    if (stream?.settle(payload.event) && payload.sessionId === sessionRef.current) setStreamRow(stream.row())
     const nextTitle = sessionTitleFromEvent(payload.event)
     if (nextTitle !== undefined && payload.sessionId === sessionRef.current) {
       setSessionTitle(nextTitle)
@@ -984,13 +1037,49 @@ export function App(): React.JSX.Element {
     return api.rpc<HistoryPage>('session.history', { sessionId: id })
   }
 
+  async function rebaselineStream(sessionId: string): Promise<void> {
+    if (sessionRef.current !== sessionId || streamRefreshRef.current.has(sessionId)) return
+    streamRefreshRef.current.add(sessionId)
+    try { await refreshHistory(sessionId) } finally { streamRefreshRef.current.delete(sessionId) }
+  }
+
   function applyHistory(id: string, history: HistoryPage): void {
     if (sessionRef.current !== id) return
+    const followed = followSnapshotsRef.current.get(id)
+    // A newer history request may have replaced this follower while the RPC
+    // response was travelling. Its older cut cannot replace the current view.
+    if (history.snapshotId !== undefined && followed !== undefined && followed.id !== history.snapshotId) {
+      pendingHistoriesRef.current.set(history.snapshotId, { sessionId: id, history })
+      // Bound retired RPC responses that will never receive another baseline.
+      if (pendingHistoriesRef.current.size > 32) {
+        const oldest = pendingHistoriesRef.current.keys().next().value
+        if (oldest !== undefined) pendingHistoriesRef.current.delete(oldest)
+      }
+      return
+    }
     const events = history.events.map((entry) => entry.event)
+    if (history.snapshotId !== undefined && followed?.id === history.snapshotId) {
+      if (followed.overflow) {
+        void rebaselineStream(id)
+        return
+      }
+      events.push(...followed.suffix)
+      followed.applied = true
+      followed.suffix = []
+    }
     applyHistoryImageProjection(id, history.projections)
     const historyTitle = latestSessionTitle(events)
     if (historyTitle !== undefined) setSessionTitle(historyTitle)
     setRows(mergeHistoryRows(events, nextSeq, locale))
+    // The pushed baseline precedes live suffix frames, so it wins over a
+    // slower history RPC response. Seed here only if no pushed state exists.
+    let stream = assistantStreamsRef.current.get(id)
+    if (stream === undefined && history.assistantStream !== undefined) {
+      stream = new AssistantStreamView()
+      stream.replace(history.assistantStream)
+      assistantStreamsRef.current.set(id, stream)
+    }
+    setStreamRow(stream?.row() ?? null)
   }
 
   async function refreshHistory(requestedId: string | null = sessionRef.current): Promise<void> {
@@ -1121,24 +1210,14 @@ export function App(): React.JSX.Element {
     }
   }
 
-  /** 删除历史会话：先走官方归档更新索引，再经桥接清理磁盘文件。 */
+  /** 删除历史会话：由桥接在存储锁内归档并清理，拒绝时保留重试入口。 */
   async function deleteSession(entry: SessionPickerEntry): Promise<void> {
     if (entry.running || sessionSwitchBlocked || sessionChangingRef.current) return
     const title = projectedSessionTitle(entry) ?? sessionDisplayTitle(entry)
     if (!window.confirm(copy.app.deleteSessionConfirm(title))) return
     try {
-      await api.rpc('workspace.archiveSession', { sessionId: entry.sessionId })
-      let purgeFailure: string | null = null
-      try {
-        await api.rpc(BRIDGE_SESSION_PURGE_METHOD, { sessionId: entry.sessionId })
-      } catch (cause) {
-        purgeFailure = cause instanceof Error ? cause.message : String(cause)
-      }
+      await api.rpc(BRIDGE_SESSION_PURGE_METHOD, { sessionId: entry.sessionId })
       setSessionList((prev) => prev.filter((item) => item.sessionId !== entry.sessionId))
-      if (purgeFailure !== null) {
-        // 归档已生效（列表不再显示），但磁盘清理失败需要用户知道。
-        setError(copy.app.deletePurgeFailed(purgeFailure))
-      }
       if (sessionRef.current === entry.sessionId) {
         setShowSessionPicker(false)
         await startNewSession()
@@ -1219,6 +1298,7 @@ export function App(): React.JSX.Element {
     preserveSelection = false,
   ): void {
     setRows([])
+    setStreamRow(null)
     setDraft(emptyComposerDraft())
     if (!preserveSelection) {
       setSelection(null)
@@ -1919,7 +1999,7 @@ export function App(): React.JSX.Element {
         </section>
       )}
       <div className="messages" ref={scrollRef}>
-        {rows.length === 0 && !working && (
+        {rows.length === 0 && streamRow === null && !working && (
           <div className="empty">
             <span className="empty-logo"><img src={whaleUrl} alt="" /></span>
             <div>
@@ -1940,7 +2020,13 @@ export function App(): React.JSX.Element {
               : <MessageBody row={row} sessionId={sessionRef.current ?? ''} api={api} copy={copy} />}
           </div>
         ))}
-        {working && question === null && rows[rows.length - 1]?.status !== 'running' && (
+        {streamRow !== null && (
+          <div className="row assistant" aria-live="polite">
+            <span className="assistant-avatar"><img src={whaleUrl} alt={copy.app.assistant} /></span>
+            <MessageBody row={streamRow} sessionId={sessionRef.current ?? ''} api={api} copy={copy} />
+          </div>
+        )}
+        {working && streamRow === null && question === null && rows[rows.length - 1]?.status !== 'running' && (
           <div className="ai-progress" role="status" aria-label={copy.app.assistantWorking}>
             <span className="assistant-avatar"><img src={whaleUrl} alt="" /></span>
             <span className="progress-dots" aria-hidden="true"><i /><i /><i /></span>

@@ -32,6 +32,15 @@ try {
     startUrl: `${site.origin}/health`,
   })
   resources.push(extension)
+  // Exercise actual authenticated unary and V3 follow/history protocols
+  // without submitting a prompt or invoking any model.
+  for (const backend of [playwright, extension]) {
+    const created = await backend.client.rpc('session.create', { cwd: runtimeRoot })
+    const catalog = await backend.client.rpc('session.modelCatalog')
+    await backend.client.rpc('session.selectModel', { sessionId: created.sessionId, ...catalog.default })
+    await backend.client.followSession(created.sessionId)
+    await backend.client.rpc('session.history', { sessionId: created.sessionId })
+  }
   extensionBrowser = await startExtensionBrowser({
     repoRoot,
     benchmarkRoot,
@@ -45,6 +54,7 @@ try {
     extension: extension.baseUrl,
     controlledTab: extensionBrowser.target.url(),
     executable: extensionBrowser.executablePath,
+    sessionTransport: 'Typert authenticated unary + V3 follow/history',
   }, null, 2))
 } catch (error) {
   console.error(error instanceof Error ? error.stack : String(error))

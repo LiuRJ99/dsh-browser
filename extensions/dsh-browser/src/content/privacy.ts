@@ -1,7 +1,7 @@
 /**
  * Privacy boundary for page snapshots: sensitive form fields are never echoed.
  *
- * DeepSeek models are text-only and the whole bridge is text-only, so the
+ * The browser page channel uses text snapshots, so the
  * snapshot is the ONLY representation of a form field's value that reaches the
  * model. Password/credit-card fields are masked to a constant placeholder; the
  * real value never leaves the page.

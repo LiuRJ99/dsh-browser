@@ -1,7 +1,7 @@
 /**
  * Text-only page snapshot: the model's entire view of the page.
  *
- * DeepSeek models cannot see images, so the snapshot renders the page as
+ * The browser tools use text snapshots, so the snapshot renders the page as
  * structured text under a hard character budget: URL/title, main content, a
  * numbered interactive inventory, and form fields (sensitive values masked).
  * `delta` mode returns only what changed since the last snapshot, and stable

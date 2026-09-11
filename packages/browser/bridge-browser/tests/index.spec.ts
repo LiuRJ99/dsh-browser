@@ -92,8 +92,18 @@ describe('apply', () => {
     const get = ctx.get.bind(ctx)
     vi.spyOn(ctx, 'get').mockImplementation((key) => key === 'typertGateway' ? gateway : get(key))
     const register = vi.spyOn(ctx.webServer, 'registerUpgrade')
-    await expect(apply(ctx, { token: 'fixed-token', ...VALID })).rejects.toThrow(/dsh 0\.1\.2-rc\.1.*wireStream unavailable/)
+    await expect(apply(ctx, { token: 'fixed-token', ...VALID })).rejects.toThrow(/dsh 0\.1\.5-rc\.2.*wireStream unavailable/)
     expect(register).not.toHaveBeenCalled()
+  })
+
+  it('leaves Remote event source ownership to the host composition', async () => {
+    const ctx = stubContext()
+    const gateway = ctx.get('typertGateway')
+    const open = vi.spyOn(gateway.wireStream, 'open')
+
+    await apply(ctx, { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })
+
+    expect(open).not.toHaveBeenCalled()
   })
 
   it('generates and persists a token when none is configured', async () => {
