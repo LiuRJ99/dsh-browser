@@ -15,14 +15,17 @@
 #    把冲突文件写进 PR 正文，省得你每次都去跑大 diff。
 # 3. **不覆盖人工修改。** 已有 open PR 时不动分支、只刷新正文；同一上游 ref 若已评估
 #    并关闭过则不重复提 PR。因此你在分支上的解冲突/试验不会被次日的定时任务冲掉。
-# 4. **`.github/workflows/**` 保持 fork 版本。** GITHUB_TOKEN 没有 `workflows` 权限，
-#    推送含 workflow 文件改动的提交会被拒：
-#      refusing to allow a GitHub App to create or update workflow ... without
-#      `workflows` permission
-#    这是 GITHUB_TOKEN 的固有限制，`permissions:` 里没有对应键可授予。做法是把分支
-#    顶端的 .github/workflows 还原成 fork 的版本，让这次推送在 workflow 文件上零改动。
-#    若仍被拒，说明 GitHub 是按逐提交判定，此时需要带 `workflow` 权限的 PAT 来推送
-#    —— 报错信息里会明确提示这一点。
+# 4. **`.github/workflows/**` 保持 fork 版本。** 做法是把分支顶端的 .github/workflows
+#    还原成 fork 的版本，让这次推送在 workflow 文件上零改动（见下一条）。
+# 5. **必须配 `SYNC_PAT` secret。** 实测：仅靠 GITHUB_TOKEN 无法开 PR —— 即使仓库已开启
+#    "Allow GitHub Actions to create and approve pull requests"、token 也确实拿到
+#    `PullRequests: write`，`gh pr create` 仍返回
+#      GraphQL: Resource not accessible by integration (createPullRequest)
+#    （把默认权限设成 read 与 write 都试过，均被拒。）所以本 workflow 要求一个
+#    fine-grained PAT，**作用范围只勾这 4 个仓库**，权限：
+#      Contents: Read and write / Pull requests: Read and write / Workflows: Read and write
+#    不要用 admin PAT。配上之后推送与开 PR 都走它，`GITHUB_TOKEN` 的 `workflows`
+#    限制也随之消失；还原 .github/workflows 的动作仍然保留，目的是不让上游覆盖 fork 的 CI。
 
 name: Sync Upstream
 
@@ -50,6 +53,22 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the SYNC_PAT secret
+        env:
+          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SYNC_PAT:-}" ]; then
+            echo "::error::Missing the SYNC_PAT secret — this workflow cannot open its evaluation PR without it."
+            echo "::error::GITHUB_TOKEN is not enough: even with 'Allow GitHub Actions to create and approve"
+            echo "::error::pull requests' enabled it returns 'Resource not accessible by integration'."
+            echo "::error::Create a fine-grained PAT scoped to this repository with Contents / Pull requests /"
+            echo "::error::Workflows = Read and write, then store it as the SYNC_PAT secret."
+            exit 1
+          fi
+          echo "SYNC_PAT is configured."
 
       - name: Fetch upstream and fork target
         id: ctx
@@ -91,7 +110,7 @@ jobs:
         id: decide
         if: steps.check.outputs.behind_count > 0
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
           TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
           UPSTREAM_SHA: ${{ steps.ctx.outputs.upstream_sha }}
         run: |
@@ -143,20 +162,20 @@ jobs:
 
       - name: Push candidate
         if: steps.decide.outputs.mode == 'create'
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_PAT }}
         run: |
           set -euo pipefail
-          # 走到这里必然没有 open PR（decide 已确认），覆盖分支是安全的
-          if ! git push --force origin "HEAD:refs/heads/$SYNC_BRANCH"; then
-            echo "::error::Push was rejected. If it mentions 'without \`workflows\` permission',"
-            echo "::error::GITHUB_TOKEN cannot update workflow files at all: switch this step to a"
-            echo "::error::PAT secret with the 'workflow' scope (e.g. SYNC_PAT) and push with it."
-            exit 1
-          fi
+          # 走到这里必然没有 open PR（decide 已确认），覆盖分支是安全的。
+          # 用 PAT 推送：GITHUB_TOKEN 连 workflow 文件改动都推不动。
+          git push --force \
+            "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/$SYNC_BRANCH"
 
       - name: Open or refresh the evaluation PR
         if: steps.decide.outputs.mode != 'skip' && steps.decide.outputs.mode != ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
           TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
           UPSTREAM_SHA: ${{ steps.ctx.outputs.upstream_sha }}
           BEHIND: ${{ steps.check.outputs.behind_count }}
