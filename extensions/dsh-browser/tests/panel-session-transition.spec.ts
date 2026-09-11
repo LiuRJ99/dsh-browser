@@ -128,6 +128,68 @@ describe('panel session transitions', () => {
     expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Hello world!')
   })
 
+  it.each([
+    { state: 'omits assistantStream', assistantStream: undefined, activeText: undefined },
+    { state: 'has no active attempt', assistantStream: { revision: 4 }, activeText: undefined },
+    { state: 'has a new active attempt', assistantStream: {
+      revision: 6,
+      activeAttempt: {
+        attemptId: 'attempt-new', turn: 1, step: 0, startedAfterSeq: 5, nextIndex: 1,
+        stream: [{ type: 'text-chunks', index: 0, time0: 3, dt: [], texts: ['New response in progress'] }],
+      },
+    }, activeText: 'New response in progress' },
+  ])('replaces a cached partial response on revisit when history $state', async ({ assistantStream, activeText }) => {
+    panelApi.setActiveSession = vi.fn(async () => {})
+    let currentHistoryReads = 0
+    const original = rpc.getMockImplementation()!
+    rpc.mockImplementation(async (method, payload) => {
+      if (method === 'session.history' && (payload as { sessionId: string }).sessionId === 'session-current') {
+        currentHistoryReads += 1
+        if (currentHistoryReads > 1) {
+          return {
+            events: [{ event: { type: 'assistant/message', seq: 5, surfaceOp: 'append', data: {
+              turn: 0, step: 0, message: { content: [{ type: 'text', text: 'Settled while away' }] },
+            } } }],
+            ...(assistantStream === undefined ? {} : { assistantStream }),
+          }
+        }
+      }
+      return original(method, payload)
+    })
+    await renderConnected(null)
+    await act(async () => {
+      onEvent?.({ t: 'event', frame: { rpcId: 'opening', method: 'session/assistant-stream', payload: {
+        sessionId: 'session-current', snapshotId: 'old-follower',
+        frame: { type: 'snapshot', baseline: { revision: 2, activeAttempt: {
+          attemptId: 'attempt-old', turn: 0, step: 0, startedAfterSeq: 4, nextIndex: 1,
+          stream: [{ type: 'text-chunks', index: 0, time0: 1, dt: [], texts: ['Stale partial response'] }],
+        } } },
+      } } })
+    })
+    expect(document.querySelector('.row.assistant')?.textContent?.trim()).toBe('Stale partial response')
+
+    const selectSession = async (index: number): Promise<void> => {
+      await act(async () => { document.querySelector<HTMLButtonElement>('.session-menu-trigger')!.click() })
+      const sessions = document.querySelectorAll<HTMLButtonElement>('.session-list li > button:not(.session-delete)')
+      expect(sessions).toHaveLength(2)
+      await act(async () => { sessions[index]!.click() })
+    }
+    await selectSession(1)
+    expect(panelApi.setActiveSession).toHaveBeenLastCalledWith('session-saved')
+    expect(document.querySelector('.row.assistant')).toBeNull()
+
+    // The old follower stops on switch; only the next history RPC reports what
+    // settled while this session was inactive, before any fresh stream opening.
+    await selectSession(0)
+    expect(panelApi.setActiveSession).toHaveBeenLastCalledWith('session-current')
+    expect(currentHistoryReads).toBe(2)
+    const assistantTexts = [...document.querySelectorAll('.row.assistant')].map(row => row.textContent?.trim())
+    expect(assistantTexts).toEqual([
+      'Settled while away',
+      ...(activeText === undefined ? [] : [activeText]),
+    ])
+  })
+
   it('keeps a session in the picker when the Host storage lock refuses deletion', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const original = rpc.getMockImplementation()!

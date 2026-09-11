@@ -1071,15 +1071,17 @@ export function App(): React.JSX.Element {
     const historyTitle = latestSessionTitle(events)
     if (historyTitle !== undefined) setSessionTitle(historyTitle)
     setRows(mergeHistoryRows(events, nextSeq, locale))
-    // The pushed baseline precedes live suffix frames, so it wins over a
-    // slower history RPC response. Seed here only if no pushed state exists.
+    // Only the baseline correlated with this history may have a newer live
+    // suffix. A view left by a previous follower is stale, even when revisiting
+    // the same session; absent stream state authoritatively clears that view.
     let stream = assistantStreamsRef.current.get(id)
-    if (stream === undefined && history.assistantStream !== undefined) {
+    const hasMatchingBaseline = history.snapshotId !== undefined && followed?.id === history.snapshotId
+    if (!hasMatchingBaseline || stream === undefined) {
       stream = new AssistantStreamView()
-      stream.replace(history.assistantStream)
+      if (history.assistantStream !== undefined) stream.replace(history.assistantStream)
       assistantStreamsRef.current.set(id, stream)
     }
-    setStreamRow(stream?.row() ?? null)
+    setStreamRow(stream.row())
   }
 
   async function refreshHistory(requestedId: string | null = sessionRef.current): Promise<void> {
