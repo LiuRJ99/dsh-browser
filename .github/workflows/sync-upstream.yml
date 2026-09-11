@@ -22,10 +22,12 @@
 #    `PullRequests: write`，`gh pr create` 仍返回
 #      GraphQL: Resource not accessible by integration (createPullRequest)
 #    （把默认权限设成 read 与 write 都试过，均被拒。）所以本 workflow 要求一个
-#    fine-grained PAT，**作用范围只勾这 4 个仓库**，权限：
-#      Contents: Read and write / Pull requests: Read and write / Workflows: Read and write
-#    不要用 admin PAT。配上之后推送与开 PR 都走它，`GITHUB_TOKEN` 的 `workflows`
-#    限制也随之消失；还原 .github/workflows 的动作仍然保留，目的是不让上游覆盖 fork 的 CI。
+#    fine-grained PAT，**作用范围只勾用到它的那几个仓库**，权限：
+#      Contents: Read and write / Pull requests: Read and write
+#    `Workflows` 不需要：第 4 点的还原动作已让推送在 workflow 文件上零改动，实测
+#    GITHUB_TOKEN（完全没有 workflows 权限）也能推成功。不要用 admin PAT。
+# 6. **每个 gh 调用都要显式 `--repo`。** 不带它时 gh 从 git remote 推断仓库；推断失败
+#    不会报错而是**返回空列表**，于是被判成「没有 open PR」而去重复创建。
 
 name: Sync Upstream
 
