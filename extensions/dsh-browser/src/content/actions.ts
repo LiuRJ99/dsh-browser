@@ -290,23 +290,91 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
   return withPageDelta(`Clicked [${index}].`, ctx)
 }
 
+/**
+ * The nearest editable host, or null when a `contenteditable="false"` island
+ * blocks editing.
+ *
+ * The walk must stop at the nearest `[contenteditable]` boundary instead of
+ * skipping disabled ones: an element inside a non-editable island nested in an
+ * editable composer belongs to the island, and resolving past it would type
+ * into the surrounding composer rather than refusing the target.
+ *
+ * @param el - element addressed by the action.
+ * @returns the owning editable host, or null when editing is blocked.
+ */
+function editingHost(el: HTMLElement): HTMLElement | null {
+  const boundary = el.closest('[contenteditable]')
+  if (!(boundary instanceof HTMLElement)) return null
+  return boundary.getAttribute('contenteditable') === 'false' ? null : boundary
+}
+
+/**
+ * Whether the element can receive rich-text input.
+ *
+ * `isContentEditable` is the browser's own answer; the boundary walk covers the
+ * attribute case, which is unimplemented in jsdom, where these tests run.
+ *
+ * @param el - element addressed by the action.
+ * @returns true when the element can receive rich-text input.
+ */
+function isEditable(el: Element): el is HTMLElement {
+  return el instanceof HTMLElement && (el.isContentEditable || editingHost(el) !== null)
+}
+
+/**
+ * Insert text into a rich-text host through the browser's editing pipeline.
+ *
+ * Editors such as Lexical, Draft.js and ProseMirror keep their own document
+ * model and reconcile away foreign DOM writes, so assigning `textContent`
+ * silently reverts and the caller's success report becomes a lie.
+ * `execCommand('insertText')` is deprecated but remains the only path that
+ * produces the `beforeinput`/`input` sequence those editors listen for. Hosts
+ * without it keep the direct-write fallback.
+ *
+ * @param el - element addressed by the action.
+ * @param text - text to insert.
+ * @param replace - whether to replace the host's current contents.
+ */
+function typeIntoContentEditable(el: HTMLElement, text: string, replace: boolean): void {
+  // `isEditable` already refused a disabled island, so a null host here means
+  // the element is editable without the attribute; address it directly.
+  const host = editingHost(el) ?? el
+  host.focus()
+  const selection = host.ownerDocument.getSelection()
+  if (selection !== null) {
+    const range = host.ownerDocument.createRange()
+    range.selectNodeContents(host)
+    // A caret collapsed to the end appends; a full selection is replaced by insertText.
+    if (!replace) range.collapse(false)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  const doc = host.ownerDocument
+  if (typeof doc.execCommand === 'function') {
+    try {
+      if (doc.execCommand('insertText', false, text)) return
+    } catch {
+      // Fall through to the direct-write path below.
+    }
+  }
+  if (replace) host.textContent = ''
+  host.textContent = `${host.textContent ?? ''}${text}`
+  host.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
 async function typeAction(args: Record<string, unknown>, ctx: ActionContext): Promise<ActionResult> {
   const index = numberArg(args, 'index')
   const text = typeof args.text === 'string' ? args.text : ''
   if (text === '') throw new ActionError('bad-args', 'text must not be empty.')
   const replace = args.replace === true
   const el = elementOrThrow(ctx.ids, index)
-  const contentEditable = el instanceof HTMLElement && el.isContentEditable
-  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || contentEditable)) {
-    throw new ActionError('action-failed', `Element [${index}] is not editable (${el.tagName.toLowerCase()}).`)
-  }
-  if (contentEditable) {
-    if (replace) el.textContent = ''
-    el.textContent = `${el.textContent ?? ''}${text}`
-    el.dispatchEvent(new Event('input', { bubbles: true }))
+  if (isEditable(el)) {
+    typeIntoContentEditable(el, text, replace)
   } else if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
     if (replace) setNativeValue(el, '')
     setNativeValue(el, `${el.value}${text}`)
+  } else {
+    throw new ActionError('action-failed', `Element [${index}] is not editable (${el.tagName.toLowerCase()}).`)
   }
   await waitForPageSettled(TYPE_SETTLE)
   return withPageDelta(`Entered ${text.length} characters into [${index}].`, ctx)
