@@ -1,0 +1,66 @@
+// @vitest-environment jsdom
+import { describe, expect, it } from 'vitest'
+import { ElementIds } from '../src/content/ids.ts'
+import { buildSnapshot, type SnapshotBudget } from '../src/content/snapshot.ts'
+
+/**
+ * An open modal owns interaction, but it is appended late in the DOM. On an
+ * element-heavy page that pushed its controls past the inventory cap, so the
+ * caller could see the page behind the dialog but not the dialog itself.
+ */
+
+const TIGHT: SnapshotBudget = { maxItems: 3, maxForms: 5, maxChars: 4_000 }
+
+function filler(count: number): string {
+  return Array.from({ length: count }, (_, i) => `<button>page-${i}</button>`).join('')
+}
+
+describe('open dialog prioritization', () => {
+  it('keeps a late-in-DOM modal control inside the capped inventory', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div role="dialog" aria-modal="true">
+        <button>modal-action</button>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items.map((item) => item.name)).toContain('modal-action')
+  })
+
+  it('ranks modal controls above the page they cover', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div role="dialog" aria-modal="true">
+        <button>modal-action</button>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items[0]?.name).toBe('modal-action')
+  })
+
+  it('does not promote a hidden pre-rendered dialog', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div role="dialog" aria-modal="true" style="display: none">
+        <button>stale-action</button>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items.map((item) => item.name)).not.toContain('stale-action')
+  })
+
+  it('recognizes a role=dialog wrapper without aria-modal', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div role="dialog">
+        <button>dialog-action</button>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items[0]?.name).toBe('dialog-action')
+  })
+})
