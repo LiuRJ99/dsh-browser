@@ -110,4 +110,22 @@ describe('open dialog prioritization', () => {
 
     expect(view.items[0]?.name).toBe('open-action')
   })
+
+  it('does not promote a dialog faded by an SVG ancestor', () => {
+    document.body.innerHTML = filler(20)
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('style', 'opacity: 0')
+    const foreign = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject')
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-modal', 'true')
+    dialog.innerHTML = '<button>svg-faded-action</button>'
+    foreign.append(dialog)
+    svg.append(foreign)
+    document.body.append(svg)
+
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items.map((item) => item.name)).not.toContain('svg-faded-action')
+  })
 })
