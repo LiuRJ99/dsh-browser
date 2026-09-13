@@ -10,7 +10,7 @@
  * @module
  */
 
-import { accessibleName, collectInteractive, isInViewport, mainText, pageText, truncate } from './extract.ts'
+import { accessibleName, collectInteractive, isInViewport, isVisible, mainText, pageText, truncate } from './extract.ts'
 import { ElementIds } from './ids.ts'
 import { isSensitiveField, maskValue } from './privacy.ts'
 
@@ -102,11 +102,28 @@ function hrefHeadline(href: string): string {
 }
 
 /**
+ * The open modal surface an element belongs to, if any.
+ *
+ * A modal makes everything behind it inert, so its controls are the real
+ * interaction surface. It is also appended late in the DOM, which would
+ * otherwise push it past the inventory cap on element-heavy pages and hide
+ * the very controls the caller needs. A closed pre-rendered dialog is not
+ * visible and must not be promoted.
+ *
+ * @param el - candidate element.
+ * @returns the owning visible dialog, or null.
+ */
+function openDialogOf(el: Element): Element | null {
+  const dialog = el.closest('[role="dialog"], [aria-modal="true"]')
+  return dialog !== null && isVisible(dialog) ? dialog : null
+}
+
+/**
  * Build a snapshot of the current page.
  *
- * Reconciles the stable id registry, collects the inventory (viewport-first,
- * capped), extracts main content (budgeted), and — in delta mode — diffs
- * against the previous snapshot.
+ * Reconciles the stable id registry, collects the inventory (dialog-first,
+ * then viewport-first, capped), extracts main content (budgeted), and — in
+ * delta mode — diffs against the previous snapshot.
  *
  * @param ids - the stable id registry (one per content-script lifetime).
  * @param options - delta flag, region selector, and negotiated budgets.
@@ -120,10 +137,15 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
   // first snapshot on a fresh document always adds everything.
   const reindexed = last !== null && added + removed > elements.length * 0.5
 
-  // Measure viewport membership once. Calling getBoundingClientRect from a
-  // sort comparator forces repeated layout reads on large pages.
-  const elementViews = elements.map((element) => ({ element, inViewport: isInViewport(element) }))
-  const ordered = [...elementViews].sort((a, b) => Number(b.inViewport) - Number(a.inViewport))
+  // Measure viewport and dialog membership once. Calling getBoundingClientRect
+  // from a sort comparator forces repeated layout reads on large pages.
+  const elementViews = elements.map((element) => ({
+    element,
+    inViewport: isInViewport(element),
+    inDialog: openDialogOf(element) !== null,
+  }))
+  const ordered = [...elementViews].sort((a, b) =>
+    Number(b.inDialog) - Number(a.inDialog) || Number(b.inViewport) - Number(a.inViewport))
   const names = new Map<Element, string>()
   const nameOf = (element: Element): string => {
     let name = names.get(element)
