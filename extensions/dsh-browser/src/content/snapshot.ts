@@ -108,17 +108,20 @@ function hrefHeadline(href: string): string {
  * reports its own `opacity: 1` and keeps a non-zero rectangle. That is exactly
  * how a dismissable modal looks while it is closing or pre-rendered, so a
  * check that reads only the dialog itself would treat it as open and let its
- * invisible controls evict the ones actually on screen. `display: none` and
- * `visibility: hidden` need no walk here: the first collapses the rectangle
- * `isVisible` already measures, and the second is inherited, so it is already
- * visible in the dialog's own computed style.
+ * invisible controls evict the ones actually on screen.
+ *
+ * The walk covers every `Element`, not only HTML: an HTML dialog can sit
+ * inside an SVG `foreignObject`, and an SVG ancestor that fades the subtree
+ * out hides it just as effectively. `display: none` and `visibility: hidden`
+ * need no walk here: the first collapses the rectangle `isVisible` already
+ * measures, and the second is inherited, so it is already visible in the
+ * dialog's own computed style.
  *
  * @param el - candidate element.
  * @returns true when no ancestor fades the subtree out.
  */
 function ancestorsRendered(el: Element): boolean {
   for (let node = el.parentElement; node !== null; node = node.parentElement) {
-    if (!(node instanceof HTMLElement)) continue
     if (getComputedStyle(node).opacity === '0') return false
   }
   return true
