@@ -63,4 +63,51 @@ describe('open dialog prioritization', () => {
 
     expect(view.items[0]?.name).toBe('dialog-action')
   })
+
+  it('does not promote a dialog faded out by an ancestor', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div style="opacity: 0">
+        <div role="dialog" aria-modal="true">
+          <button>faded-action</button>
+        </div>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items.map((item) => item.name)).not.toContain('faded-action')
+  })
+
+  it('does not let a faded dialog evict the controls actually on screen', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div style="opacity: 0">
+        <div role="dialog" aria-modal="true">
+          <button>faded-action</button>
+        </div>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    // Without the ancestor walk the faded control would be promoted and take
+    // one of the three slots, displacing a real one.
+    expect(view.items.map((item) => item.name)).toEqual(['page-0', 'page-1', 'page-2'])
+  })
+
+  it('still promotes a dialog whose sibling is faded', () => {
+    document.body.innerHTML = `
+      ${filler(20)}
+      <div style="opacity: 0">
+        <div role="dialog" aria-modal="true">
+          <button>faded-action</button>
+        </div>
+      </div>
+      <div role="dialog" aria-modal="true">
+        <button>open-action</button>
+      </div>
+    `
+    const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
+
+    expect(view.items[0]?.name).toBe('open-action')
+  })
 })

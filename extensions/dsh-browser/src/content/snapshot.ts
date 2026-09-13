@@ -102,6 +102,49 @@ function hrefHeadline(href: string): string {
 }
 
 /**
+ * Whether no ancestor hides the subtree by opacity.
+ *
+ * `opacity` does not inherit, so an element inside a faded-out subtree still
+ * reports its own `opacity: 1` and keeps a non-zero rectangle. That is exactly
+ * how a dismissable modal looks while it is closing or pre-rendered, so a
+ * check that reads only the dialog itself would treat it as open and let its
+ * invisible controls evict the ones actually on screen. `display: none` and
+ * `visibility: hidden` need no walk here: the first collapses the rectangle
+ * `isVisible` already measures, and the second is inherited, so it is already
+ * visible in the dialog's own computed style.
+ *
+ * @param el - candidate element.
+ * @returns true when no ancestor fades the subtree out.
+ */
+function ancestorsRendered(el: Element): boolean {
+  for (let node = el.parentElement; node !== null; node = node.parentElement) {
+    if (!(node instanceof HTMLElement)) continue
+    if (getComputedStyle(node).opacity === '0') return false
+  }
+  return true
+}
+
+/**
+ * Build a memoized "is this dialog open?" test.
+ *
+ * Openness depends only on the dialog, so the ancestor walk is evaluated once
+ * per dialog rather than once per candidate element.
+ *
+ * @returns a predicate over dialog elements.
+ */
+function openDialogTest(): (dialog: Element) => boolean {
+  const seen = new Map<Element, boolean>()
+  return (dialog) => {
+    let open = seen.get(dialog)
+    if (open === undefined) {
+      open = isVisible(dialog) && ancestorsRendered(dialog)
+      seen.set(dialog, open)
+    }
+    return open
+  }
+}
+
+/**
  * The open modal surface an element belongs to, if any.
  *
  * A modal makes everything behind it inert, so its controls are the real
@@ -111,11 +154,12 @@ function hrefHeadline(href: string): string {
  * visible and must not be promoted.
  *
  * @param el - candidate element.
- * @returns the owning visible dialog, or null.
+ * @param isOpen - memoized openness test for a dialog element.
+ * @returns the owning open dialog, or null.
  */
-function openDialogOf(el: Element): Element | null {
+function openDialogOf(el: Element, isOpen: (dialog: Element) => boolean): Element | null {
   const dialog = el.closest('[role="dialog"], [aria-modal="true"]')
-  return dialog !== null && isVisible(dialog) ? dialog : null
+  return dialog !== null && isOpen(dialog) ? dialog : null
 }
 
 /**
@@ -139,10 +183,11 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
 
   // Measure viewport and dialog membership once. Calling getBoundingClientRect
   // from a sort comparator forces repeated layout reads on large pages.
+  const isOpenDialog = openDialogTest()
   const elementViews = elements.map((element) => ({
     element,
     inViewport: isInViewport(element),
-    inDialog: openDialogOf(element) !== null,
+    inDialog: openDialogOf(element, isOpenDialog) !== null,
   }))
   const ordered = [...elementViews].sort((a, b) =>
     Number(b.inDialog) - Number(a.inDialog) || Number(b.inViewport) - Number(a.inViewport))
