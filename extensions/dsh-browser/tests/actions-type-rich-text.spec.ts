@@ -23,8 +23,33 @@ function host(html = ''): HTMLElement {
   return el
 }
 
-function stubExecCommand(inserted = true): ReturnType<typeof vi.fn> {
-  const spy = vi.fn(() => inserted)
+/**
+ * Model the editing pipeline rather than only its return value.
+ *
+ * A stub that just returns `true` cannot distinguish "the command ran" from
+ * "the editor accepted the input", which is the exact failure this fix exists
+ * to correct. This one replaces the current selection and emits the
+ * `beforeinput`/`input` sequence, so the resulting DOM is the observable proof.
+ *
+ * @param accept - when false, simulates a host that refuses the command.
+ * @returns the `execCommand` spy.
+ */
+function stubEditingPipeline(accept = true): ReturnType<typeof vi.fn> {
+  const spy = vi.fn((command: string, _ui: boolean, value: string) => {
+    if (command !== 'insertText' || !accept) return false
+    const selection = document.getSelection()
+    if (selection === null || selection.rangeCount === 0) return false
+    const range = selection.getRangeAt(0)
+    const container = range.commonAncestorContainer
+    const node = container instanceof HTMLElement ? container : container.parentElement
+    const editable = node?.closest('[contenteditable]:not([contenteditable="false"])')
+    if (!(editable instanceof HTMLElement)) return false
+    editable.dispatchEvent(new Event('beforeinput', { bubbles: true, cancelable: true }))
+    range.deleteContents()
+    range.insertNode(document.createTextNode(value))
+    editable.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })
   Object.defineProperty(document, 'execCommand', { configurable: true, writable: true, value: spy })
   return spy
 }
@@ -36,16 +61,28 @@ afterEach(() => {
 })
 
 describe('typing into rich-text editors', () => {
-  it('inserts through execCommand instead of assigning textContent', async () => {
+  it('lands the text in the host through the pipeline, without a second direct write', async () => {
     const el = host()
-    const spy = stubExecCommand()
+    const spy = stubEditingPipeline()
 
     await runAction('browser_type', { index: 3, text: 'hello world' }, { ids: idsFor(el), budget: BUDGET })
 
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith('insertText', false, 'hello world')
-    // The direct-write path must not also run, or editors see a duplicate write.
-    expect(el.textContent).toBe('')
+    // The observable outcome, not just the invocation.
+    expect(el.textContent).toBe('hello world')
+  })
+
+  it('emits the beforeinput/input sequence editors listen for', async () => {
+    const el = host()
+    const seen: string[] = []
+    el.addEventListener('beforeinput', () => seen.push('beforeinput'))
+    el.addEventListener('input', () => seen.push('input'))
+    stubEditingPipeline()
+
+    await runAction('browser_type', { index: 3, text: 'hi' }, { ids: idsFor(el), budget: BUDGET })
+
+    expect(seen).toEqual(['beforeinput', 'input'])
   })
 
   it('places the selection inside the editing host before inserting', async () => {
@@ -97,19 +134,27 @@ describe('typing into rich-text editors', () => {
     const el = host('<span id="inner">x</span>')
     const inner = el.querySelector('#inner')
     expect(inner).not.toBeNull()
-    const spy = stubExecCommand()
-    let anchorInsideHost = false
-    spy.mockImplementation((_command: string, _ui: boolean, _value: string) => {
-      const selection = document.getSelection()
-      anchorInsideHost = selection !== null
-        && selection.rangeCount > 0
-        && el.contains(selection.getRangeAt(0).startContainer)
-      return true
-    })
+    stubEditingPipeline()
 
     await runAction('browser_type', { index: 5, text: 'y' }, { ids: idsFor(inner!), budget: BUDGET })
 
-    expect(anchorInsideHost).toBe(true)
+    // The text belongs to the outer host, not to the addressed span.
+    expect(el.textContent).toBe('xy')
+  })
+
+  it('refuses an element inside a contenteditable=false island', async () => {
+    const el = host('<div contenteditable="false"><span id="chip">@mention</span></div>')
+    const chip = el.querySelector('#chip')
+    expect(chip).not.toBeNull()
+    const spy = stubEditingPipeline()
+
+    await expect(
+      runAction('browser_type', { index: 9, text: 'x' }, { ids: idsFor(chip!), budget: BUDGET }),
+    ).rejects.toMatchObject({ message: 'Element [9] is not editable (span).' })
+
+    // The island is not editable, and the surrounding composer must not be used.
+    expect(spy).not.toHaveBeenCalled()
+    expect(el.textContent).toBe('@mention')
   })
 
   it('falls back to the direct write when the host lacks execCommand', async () => {
@@ -123,7 +168,7 @@ describe('typing into rich-text editors', () => {
 
   it('falls back to the direct write when execCommand reports failure', async () => {
     const el = host()
-    stubExecCommand(false)
+    stubEditingPipeline(false)
 
     await runAction('browser_type', { index: 3, text: 'plain' }, { ids: idsFor(el), budget: BUDGET })
 
@@ -135,7 +180,7 @@ describe('typing into plain inputs is unchanged', () => {
   it('still sets value through the native setter', async () => {
     const input = document.createElement('input')
     document.body.append(input)
-    const spy = stubExecCommand()
+    const spy = stubEditingPipeline()
 
     await runAction('browser_type', { index: 1, text: 'search term' }, { ids: idsFor(input), budget: BUDGET })
 
