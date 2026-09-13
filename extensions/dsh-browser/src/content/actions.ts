@@ -290,24 +290,35 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
   return withPageDelta(`Clicked [${index}].`, ctx)
 }
 
-/** The nearest editable host, which owns focus and the selection. */
-function editingHost(el: HTMLElement): HTMLElement {
-  const host = el.closest('[contenteditable]:not([contenteditable="false"])')
-  return host instanceof HTMLElement ? host : el
+/**
+ * The nearest editable host, or null when a `contenteditable="false"` island
+ * blocks editing.
+ *
+ * The walk must stop at the nearest `[contenteditable]` boundary instead of
+ * skipping disabled ones: an element inside a non-editable island nested in an
+ * editable composer belongs to the island, and resolving past it would type
+ * into the surrounding composer rather than refusing the target.
+ *
+ * @param el - element addressed by the action.
+ * @returns the owning editable host, or null when editing is blocked.
+ */
+function editingHost(el: HTMLElement): HTMLElement | null {
+  const boundary = el.closest('[contenteditable]')
+  if (!(boundary instanceof HTMLElement)) return null
+  return boundary.getAttribute('contenteditable') === 'false' ? null : boundary
 }
 
 /**
- * Whether the element is, or sits inside, an editable host.
+ * Whether the element can receive rich-text input.
  *
- * `isContentEditable` covers descendants of a host but is unimplemented in
- * jsdom, so the attribute walk is checked too; either signal is sufficient.
+ * `isContentEditable` is the browser's own answer; the boundary walk covers the
+ * attribute case, which is unimplemented in jsdom, where these tests run.
  *
  * @param el - element addressed by the action.
  * @returns true when the element can receive rich-text input.
  */
 function isEditable(el: Element): el is HTMLElement {
-  return el instanceof HTMLElement
-    && (el.isContentEditable || el.closest('[contenteditable]:not([contenteditable="false"])') !== null)
+  return el instanceof HTMLElement && (el.isContentEditable || editingHost(el) !== null)
 }
 
 /**
@@ -325,7 +336,9 @@ function isEditable(el: Element): el is HTMLElement {
  * @param replace - whether to replace the host's current contents.
  */
 function typeIntoContentEditable(el: HTMLElement, text: string, replace: boolean): void {
-  const host = editingHost(el)
+  // `isEditable` already refused a disabled island, so a null host here means
+  // the element is editable without the attribute; address it directly.
+  const host = editingHost(el) ?? el
   host.focus()
   const selection = host.ownerDocument.getSelection()
   if (selection !== null) {
