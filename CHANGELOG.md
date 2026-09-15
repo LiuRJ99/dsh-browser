@@ -3,6 +3,14 @@
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.7] - 2026-09-15
+
+### Fixed
+
+- **富文本编辑器输入**：通过浏览器原生编辑管线写入 contenteditable，并在 disabled contenteditable 边界停止向上查找，避免命中错误编辑宿主。
+- **桥重启后的会话恢复**：重新连接后等待新鲜 resume hint，避免沿用旧桥实例的恢复状态。
+- **依赖安全更新**：更新 sharp 与 Vitest，消除已知依赖漏洞。
+
 ## [0.1.6] - 2026-09-11
 
 ### Added
@@ -82,6 +90,7 @@
 
 - 首次发布：token 认证的 WebSocket 桥接插件（`@yuxianglin/dsh-bridge-browser`）与 Chrome MV3 侧栏扩展（dsh-browser-extension），提供文本化浏览器快照与受控标签页操作工具。
 
+[0.1.7]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.7
 [0.1.6]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.6
 [0.1.5]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.5
 [0.1.3]: https://github.com/YuxiangLin/dsh-browser/releases/tag/v0.1.3
