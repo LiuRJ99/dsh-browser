@@ -3,8 +3,8 @@
 # 这个 workflow **不做任何合并**。它只负责把上游的新提交摆到你面前，由人决定
 # 合并哪些、丢弃哪些（有些功能需要选择性合并，不能整包吃下）。
 #
-# bot 做三件事：检测上游新提交、生成候选分支、开/更新 PR。
-# 人做一件事：审那个 PR，然后**选择性合并**或**关闭并写明不吸收原因**。
+# bot 做三件事：检测上游新提交、生成候选分支、开评估 PR。
+# 人做一件事：审那个 PR，然后整包合并，或记录 whole/partial/rejected 决策后关闭。
 #
 # 设计要点（改动前请读完）：
 #
@@ -13,20 +13,22 @@
 #    里等人评估，不会被 bot 用 `-X ours`、冲突标记提交或任何方式"处理掉"。
 # 2. **冲突清单在内存里算。** 用 `git merge-tree --write-tree`（只读，不动工作区），
 #    把冲突文件写进 PR 正文，省得你每次都去跑大 diff。
-# 3. **不覆盖人工修改。** 已有 open PR 时不动分支、只刷新正文；同一上游 ref 若已评估
-#    并关闭过则不重复提 PR。因此你在分支上的解冲突/试验不会被次日的定时任务冲掉。
-# 4. **`.github/workflows/**` 保持 fork 版本。** 做法是把分支顶端的 .github/workflows
+# 3. **不覆盖人工修改。** PR 是不可变的上游快照；已有 open PR 时既不动分支也不刷新正文。
+#    上游继续前进时，等当前 PR 关闭或合并后再生成下一份快照。
+# 4. **按评估边界去重。** 已关闭或已合并 PR 正文中的 upstream-sha 是最近一次评估边界；
+#    下一份 PR 只列该边界之后的新提交，不因 fork 没有整包吸收而重复列旧提交。
+# 5. **`.github/workflows/**` 保持 fork 版本。** 做法是把分支顶端的 .github/workflows
 #    还原成 fork 的版本，让这次推送在 workflow 文件上零改动（见下一条）。
-# 5. **必须配 `SYNC_PAT` secret。** 实测：仅靠 GITHUB_TOKEN 无法开 PR —— 即使仓库已开启
+# 6. **必须配 `SYNC_PAT` secret。** 实测：仅靠 GITHUB_TOKEN 无法开 PR —— 即使仓库已开启
 #    "Allow GitHub Actions to create and approve pull requests"、token 也确实拿到
 #    `PullRequests: write`，`gh pr create` 仍返回
 #      GraphQL: Resource not accessible by integration (createPullRequest)
 #    （把默认权限设成 read 与 write 都试过，均被拒。）所以本 workflow 要求一个
 #    fine-grained PAT，**作用范围只勾用到它的那几个仓库**，权限：
 #      Contents: Read and write / Pull requests: Read and write
-#    `Workflows` 不需要：第 4 点的还原动作已让推送在 workflow 文件上零改动，实测
+#    `Workflows` 不需要：第 5 点的还原动作已让推送在 workflow 文件上零改动，实测
 #    GITHUB_TOKEN（完全没有 workflows 权限）也能推成功。不要用 admin PAT。
-# 6. **每个 gh 调用都要显式 `--repo`。** 不带它时 gh 从 git remote 推断仓库；推断失败
+# 7. **每个 gh 调用都要显式 `--repo`。** 不带它时 gh 从 git remote 推断仓库；推断失败
 #    不会报错而是**返回空列表**，于是被判成「没有 open PR」而去重复创建。
 
 name: Sync Upstream
@@ -66,8 +68,8 @@ jobs:
             echo "::error::Missing the SYNC_PAT secret — this workflow cannot open its evaluation PR without it."
             echo "::error::GITHUB_TOKEN is not enough: even with 'Allow GitHub Actions to create and approve"
             echo "::error::pull requests' enabled it returns 'Resource not accessible by integration'."
-            echo "::error::Create a fine-grained PAT scoped to this repository with Contents / Pull requests /"
-            echo "::error::Workflows = Read and write, then store it as the SYNC_PAT secret."
+            echo "::error::Create a fine-grained PAT scoped to this repository with Contents / Pull requests"
+            echo "::error::read and write, then store it as the SYNC_PAT secret."
             exit 1
           fi
           echo "SYNC_PAT is configured."
@@ -90,64 +92,98 @@ jobs:
 
           echo "upstream_sha=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
 
-      - name: Count unabsorbed upstream commits
-        id: check
-        env:
-          TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
-        run: |
-          set -euo pipefail
-          BEHIND=$(git rev-list --count "origin/$TARGET_BRANCH..upstream/main")
-          echo "behind_count=$BEHIND" >> "$GITHUB_OUTPUT"
-          echo "Unabsorbed upstream commits: $BEHIND"
-          if [ "$BEHIND" -gt 0 ]; then
-            git log "origin/$TARGET_BRANCH..upstream/main" --oneline -n 25 > /tmp/commits.txt
-            # 内存试合并：只读，不动工作区；这是「差异大小」的官方判据
-            git merge-tree --write-tree "origin/$TARGET_BRANCH" upstream/main 2>/dev/null \
-              | awk -F'\t' '/^[0-7]{6} [0-9a-f]{40} [123]\t/ {print $2}' \
-              | sort -u > /tmp/conflicts.txt || true
-            echo "conflict_count=$(grep -c . /tmp/conflicts.txt || true)" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Decide whether this upstream state is already covered
+      - name: Find the PR evaluation boundary
         id: decide
-        if: steps.check.outputs.behind_count > 0
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}
           TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
           UPSTREAM_SHA: ${{ steps.ctx.outputs.upstream_sha }}
+          SYNC_BRANCH: ${{ env.SYNC_BRANCH }}
         run: |
           set -euo pipefail
 
-          # 已有 open PR -> 只刷新正文，绝不动分支（保护人工的解冲突与试验）
+          # 已有 open PR 是不可变评估快照，绝不重写分支或正文。
           # 显式 --repo：不要靠 gh 从 git remote 推断仓库，推断失败时会静默返回空，
           # 于是误判成「没有 PR」而去重复创建。
           OPEN_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
             --base "$TARGET_BRANCH" --state open \
             --json number --jq '.[0].number // empty')
-          echo "open PR for $SYNC_BRANCH: '${OPEN_PR}'"
+          echo "open PR for $SYNC_BRANCH: '$OPEN_PR'"
           if [ -n "$OPEN_PR" ]; then
-            echo "mode=refresh" >> "$GITHUB_OUTPUT"
+            OPEN_BODY=$(gh pr view "$OPEN_PR" --repo "$GITHUB_REPOSITORY" \
+              --json body --jq '.body // ""')
+            OPEN_SHA=$(printf '%s\n' "$OPEN_BODY" |
+              sed -nE 's/.*<!-- upstream-sha: ([0-9a-f]{40}) -->.*/\1/p' | head -1)
+            echo "mode=hold" >> "$GITHUB_OUTPUT"
             echo "pr_number=$OPEN_PR" >> "$GITHUB_OUTPUT"
-            echo "Open PR #$OPEN_PR already exists; branch left untouched."
+            echo "open_upstream_sha=${OPEN_SHA:-unknown}" >> "$GITHUB_OUTPUT"
+            echo "Open PR #$OPEN_PR is the evaluation snapshot for upstream ${OPEN_SHA:-unknown}."
+            if [ "${OPEN_SHA:-}" != "$UPSTREAM_SHA" ]; then
+              echo "Upstream is now $UPSTREAM_SHA; newer commits wait for this PR to close or merge."
+            fi
             exit 0
           fi
 
-          # 同一上游 ref 若已评估并关闭过（未合并）-> 不重复提。这就是「不吸收」的记录。
-          # 注意：gh --jq 输出的 body 是单行（JSON 转义过换行），所以 grep -c 可直接计数。
-          EVALUATED=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
-            --base "$TARGET_BRANCH" --state all \
-            --json number,state,body \
-            --jq '.[] | select(.state != "MERGED") | .body' \
-            | grep -c -- "upstream-sha: $UPSTREAM_SHA" || true)
-          EVALUATED="${EVALUATED:-0}"
-          echo "closed-and-not-absorbed PRs for this upstream ref: $EVALUATED"
-          if [ "$EVALUATED" -gt 0 ]; then
+          # PR 正文里的 marker 是评估边界。取仍在当前 upstream 历史上的最近边界，
+          # 使 selective absorb / reject 后的新 PR 只呈现新增 upstream 提交。
+          EVALUATED_SHAS=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --base "$TARGET_BRANCH" --state all --limit 100 \
+            --json body --jq '.[].body // empty' |
+            sed -nE 's/.*<!-- upstream-sha: ([0-9a-f]{40}) -->.*/\1/p' |
+            sort -u || true)
+          BASE_SHA="origin/$TARGET_BRANCH"
+          BEST_SHA=""
+          BEST_REMAINING=""
+          for candidate in $EVALUATED_SHAS; do
+            if ! git cat-file -e "$candidate^{commit}" 2>/dev/null; then
+              continue
+            fi
+            if ! git merge-base --is-ancestor "$candidate" upstream/main; then
+              continue
+            fi
+            remaining=$(git rev-list --count "$candidate..upstream/main")
+            if [ -z "$BEST_SHA" ] || [ "$remaining" -lt "$BEST_REMAINING" ]; then
+              BEST_SHA="$candidate"
+              BEST_REMAINING="$remaining"
+            fi
+          done
+          if [ -n "$BEST_SHA" ]; then
+            BASE_SHA="$BEST_SHA"
+            echo "Last evaluated upstream boundary: $BASE_SHA"
+          else
+            echo "No usable evaluated boundary; falling back to fork target."
+          fi
+          echo "baseline_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          BEHIND=$(git rev-list --count "$BASE_SHA..upstream/main")
+          echo "New upstream commits since evaluation boundary: $BEHIND"
+          if [ "$BEHIND" -eq 0 ]; then
             echo "mode=skip" >> "$GITHUB_OUTPUT"
-            echo "Upstream $UPSTREAM_SHA already evaluated and not absorbed; skipping."
+            echo "Upstream $UPSTREAM_SHA is already covered by an evaluated boundary; skipping."
             exit 0
           fi
-
           echo "mode=create" >> "$GITHUB_OUTPUT"
+
+      - name: Build report inputs
+        id: check
+        if: steps.decide.outputs.mode == 'create'
+        env:
+          BASELINE_SHA: ${{ steps.decide.outputs.baseline_sha }}
+          TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
+        run: |
+          set -euo pipefail
+          BEHIND=$(git rev-list --count "$BASELINE_SHA..upstream/main")
+          echo "behind_count=$BEHIND" >> "$GITHUB_OUTPUT"
+          git log --oneline --reverse "$BASELINE_SHA..upstream/main" > /tmp/commits.txt
+          # 内存试合并：只读，不动工作区；排除生成物后才是功能冲突面。
+          git merge-tree --write-tree "origin/$TARGET_BRANCH" upstream/main 2>/dev/null \
+            | awk -F'\t' '/^[0-7]{6} [0-9a-f]{40} [123]\t/ {print $2}' \
+            | awk '
+                /(^|\/)(lib|dist)\// || /\.map$/ ||
+                /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock)$/ {next}
+                {print}
+              ' \
+            | sort -u > /tmp/conflicts.txt || true
+          echo "conflict_count=$(grep -c . /tmp/conflicts.txt || true)" >> "$GITHUB_OUTPUT"
 
       - name: Build the candidate branch (upstream content, fork CI)
         if: steps.decide.outputs.mode == 'create'
@@ -180,50 +216,55 @@ jobs:
             "https://x-access-token:${SYNC_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "HEAD:refs/heads/$SYNC_BRANCH"
 
-      - name: Open or refresh the evaluation PR
-        if: steps.decide.outputs.mode != 'skip' && steps.decide.outputs.mode != ''
+      - name: Open the evaluation PR
+        if: steps.decide.outputs.mode == 'create'
         env:
           GH_TOKEN: ${{ secrets.SYNC_PAT }}
           TARGET_BRANCH: ${{ steps.ctx.outputs.target_branch }}
           UPSTREAM_SHA: ${{ steps.ctx.outputs.upstream_sha }}
+          BASELINE_SHA: ${{ steps.decide.outputs.baseline_sha }}
           BEHIND: ${{ steps.check.outputs.behind_count }}
           CONFLICTS: ${{ steps.check.outputs.conflict_count }}
-          MODE: ${{ steps.decide.outputs.mode }}
-          PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
         run: |
           set -euo pipefail
           {
             echo "## Upstream sync report"
             echo
-            echo "Upstream \`$UPSTREAM_REPO:main\` has **$BEHIND** commit(s) not yet absorbed."
+            echo "Upstream $UPSTREAM_REPO:main has **$BEHIND** commit(s) since the last evaluated ref $BASELINE_SHA."
             echo
-            echo "**This PR is an evaluation surface — nothing is merged automatically.** Take the"
-            echo "parts you want (selective merge is expected), then either merge or close it."
-            echo "Closing without merging records the decision: the same upstream ref will not be"
-            echo "proposed again."
+            echo "**This PR is an immutable evaluation snapshot — nothing is merged automatically.**"
+            echo "Evaluate the new commit range below. Older rejected or selectively absorbed changes"
+            echo "may still appear in the GitHub file diff because they remain part of the fork delta."
+            echo "If upstream advances while this PR is open, the next snapshot waits until this PR"
+            echo "is closed or merged."
             echo
             echo "### New upstream commits"
-            echo '```text'
+            printf '%s\n' '---'
             cat /tmp/commits.txt
-            echo '```'
+            printf '%s\n' '---'
             echo
             echo "### Conflict surface: **${CONFLICTS:-0}** file(s)"
             echo
             if [ "${CONFLICTS:-0}" -gt 0 ]; then
-              echo "Computed in memory with \`git merge-tree\` (read-only). These are the files where"
+              echo "Computed in memory with git merge-tree (read-only). These are the files where"
               echo "fork and upstream both changed the same file:"
               echo
-              echo '```text'
+              printf '%s\n' '---'
               sed 's/^/  - /' /tmp/conflicts.txt
-              echo '```'
+              printf '%s\n' '---'
               echo
             else
-              echo "No same-file conflicts against fork \`$TARGET_BRANCH\` — upstream can be taken whole."
+              echo "No same-file conflicts against fork $TARGET_BRANCH — upstream can be taken whole."
               echo
             fi
+            echo "### Decision protocol"
+            echo
+            echo "After review, leave a comment recording whole, partial, or rejected."
+            echo "For partial decisions, list the absorbed and rejected upstream commit SHAs and reasons."
+            echo "<!-- upstream-decision: whole|partial|rejected -->"
             echo "### Notes"
             echo
-            echo "- \`.github/workflows/**\` keeps the fork's version: \`GITHUB_TOKEN\` cannot push"
+            echo "- .github/workflows/** keeps the fork's version: GITHUB_TOKEN cannot push"
             echo "  workflow-file changes, and the fork owns its CI."
             echo "- While this PR is open the bot never rewrites the branch, so your conflict"
             echo "  resolutions and experiments here are safe."
@@ -240,12 +281,6 @@ jobs:
             DRAFT_FLAG="--draft"
           fi
 
-          if [ "$MODE" = "refresh" ]; then
-            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --title "$TITLE" --body-file /tmp/pr-body.md
-            echo "Refreshed PR #$PR_NUMBER (branch untouched)."
-          else
-            gh pr create --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
-              --base "$TARGET_BRANCH" \
-              --title "$TITLE" --body-file /tmp/pr-body.md $DRAFT_FLAG
-          fi
+          gh pr create --repo "$GITHUB_REPOSITORY" --head "$SYNC_BRANCH" \
+            --base "$TARGET_BRANCH" \
+            --title "$TITLE" --body-file /tmp/pr-body.md $DRAFT_FLAG
