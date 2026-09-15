@@ -714,6 +714,7 @@ export function App(): React.JSX.Element {
         sessionInitializationRef.current = false
         sessionChangingRef.current = false
         sessionRef.current = null
+        setResumeHint({ ready: false, sessionId: null })
         sessionRuntimeRef.current.clear()
         setRows([])
         setDraft((current) => ({ ...current, images: [] }))

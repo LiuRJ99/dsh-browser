@@ -317,6 +317,16 @@ function broadcastStatus(): void {
   }
 }
 
+/** Re-send the persisted session candidate after a bridge epoch ends. */
+function refreshResumeHints(): void {
+  for (const port of panelPorts) {
+    void recentSession.ready.then(() => {
+      if (!panelPorts.has(port)) return
+      try { port.postMessage({ type: 'session.resume-hint', sessionId: recentSession.current() }) } catch { /* port closed */ }
+    })
+  }
+}
+
 function broadcastTabAffinity(): void {
   const payload = { type: 'tab-affinity', state: tabAffinity.snapshot() }
   for (const port of panelPorts) {
@@ -1354,6 +1364,7 @@ async function startBridge(): Promise<void> {
           transientEvents.clear()
         }
         broadcastStatus()
+        if (state === 'stopped') refreshResumeHints()
         if (state === 'stopped' && panelPorts.size === 0) disarmBridgeKeepalive()
       },
       onFrame: (frame) => {

@@ -143,4 +143,29 @@ describe('panel session transitions', () => {
     })
     expect(panelApi.rebindTabAffinity).not.toHaveBeenCalled()
   })
+
+  it('waits for a fresh resume hint after a bridge restart', async () => {
+    const storageGet = chrome.storage.local.get as unknown as { mockResolvedValue: (value: unknown) => void }
+    storageGet.mockResolvedValue({ dshSettings: { autoResumeSession: true } })
+
+    await act(async () => { root.render(createElement(App)) })
+    await act(async () => {
+      onStatus?.('connected', null)
+      onResumeHint?.(null)
+    })
+    await vi.waitFor(() => {
+      expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current')
+    })
+    const callsAfterInitialSession = (panelApi.setActiveSession as ReturnType<typeof vi.fn>).mock.calls.length
+
+    await act(async () => { onStatus?.('stopped', null) })
+    await act(async () => { onStatus?.('connected', null) })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect((panelApi.setActiveSession as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterInitialSession)
+
+    await act(async () => { onResumeHint?.(null) })
+    await vi.waitFor(() => {
+      expect((panelApi.setActiveSession as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterInitialSession)
+    })
+  })
 })
