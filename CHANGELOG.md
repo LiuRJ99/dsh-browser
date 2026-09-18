@@ -3,6 +3,13 @@
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.8] - 2026-09-18
+
+### Fixed
+
+- **弹窗控件识别**：在元素清单容量受限时优先保留已打开弹窗中的控件，避免页面背景元素挤出当前可操作项。
+- **关闭态判断**：过滤被 HTML 或 SVG 祖先透明度隐藏的弹窗，避免已关闭控件占用清单容量。
+
 ## [0.1.7] - 2026-09-15
 
 ### Fixed
@@ -90,6 +97,7 @@
 
 - 首次发布：token 认证的 WebSocket 桥接插件（`@yuxianglin/dsh-bridge-browser`）与 Chrome MV3 侧栏扩展（dsh-browser-extension），提供文本化浏览器快照与受控标签页操作工具。
 
+[0.1.8]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.8
 [0.1.7]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.7
 [0.1.6]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.6
 [0.1.5]: https://github.com/LiuRJ99/dsh-browser/releases/tag/v0.1.5
