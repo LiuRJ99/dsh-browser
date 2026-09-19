@@ -83,14 +83,15 @@ function QuestionItemView({
   const multi = item.multiSelect === true
   return (
     <fieldset className="question-item" disabled={disabled}>
-      <legend>
+      <legend className="question-legend">{item.question}</legend>
+      <div className="question-prompt">
         {count > 1 && <span className="question-index">{index + 1}</span>}
         <span className="question-copy">
           {item.header !== undefined && item.header !== '' && <span className="question-header">{item.header}</span>}
-          <strong>{item.question}</strong>
+          <strong aria-hidden="true">{item.question}</strong>
           {item.detail !== undefined && item.detail !== '' && <small>{item.detail}</small>}
         </span>
-      </legend>
+      </div>
       {item.options !== undefined && item.options.length > 0 && (
         <div className="question-options">
           {item.options.map((option, optionIndex) => {
