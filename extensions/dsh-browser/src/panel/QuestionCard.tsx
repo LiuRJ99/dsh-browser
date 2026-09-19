@@ -81,14 +81,20 @@ function QuestionItemView({
 }): React.JSX.Element {
   const draft = draftFor(drafts, index)
   const multi = item.multiSelect === true
+  const legend = [
+    count > 1 ? String(index + 1) : '',
+    item.header ?? '',
+    item.question,
+    item.detail ?? '',
+  ].filter((part) => part !== '').join(' ')
   return (
     <fieldset className="question-item" disabled={disabled}>
-      <legend className="question-legend">{item.question}</legend>
-      <div className="question-prompt">
+      <legend className="question-legend">{legend}</legend>
+      <div className="question-prompt" aria-hidden="true">
         {count > 1 && <span className="question-index">{index + 1}</span>}
         <span className="question-copy">
           {item.header !== undefined && item.header !== '' && <span className="question-header">{item.header}</span>}
-          <strong aria-hidden="true">{item.question}</strong>
+          <strong>{item.question}</strong>
           {item.detail !== undefined && item.detail !== '' && <small>{item.detail}</small>}
         </span>
       </div>
