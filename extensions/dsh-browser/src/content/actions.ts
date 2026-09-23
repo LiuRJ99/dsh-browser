@@ -253,14 +253,23 @@ export async function runAction(action: string, args: Record<string, unknown>, c
 function snapshotAction(args: Record<string, unknown>, ctx: ActionContext): ActionResult {
   const delta = args.delta === true
   const region = typeof args.region === 'string' && args.region !== '' ? args.region : undefined
+  if (args.includeNonSemantic !== undefined && typeof args.includeNonSemantic !== 'boolean') throw new ActionError('bad-args', 'includeNonSemantic must be boolean.')
+  if (args.candidateSelector !== undefined && (typeof args.candidateSelector !== 'string' || args.candidateSelector.trim() === '')) throw new ActionError('bad-args', 'candidateSelector must be a non-empty CSS selector.')
+  const candidateSelector = args.candidateSelector as string | undefined
+  if (candidateSelector !== undefined) {
+    try { document.querySelector(candidateSelector) } catch { throw new ActionError('bad-args', 'candidateSelector is not a valid CSS selector.') }
+  }
+  const inventory = { includeNonSemantic: args.includeNonSemantic === true, candidateSelector }
   // 基线在每次快照后都更新：delta 调用才能相对上一次（无论是否 delta）比较。
-  const view = buildSnapshot(ctx.ids, { delta, region, budget: ctx.budget }, lastSnapshot)
+  const view = buildSnapshot(ctx.ids, { delta, region, ...inventory, budget: ctx.budget }, lastSnapshot)
   lastSnapshot = view
+  lastInventoryOptions = inventory
   return { text: renderSnapshot(view, delta) }
 }
 
 /** Module-level last snapshot state for delta mode (content-script lifetime). */
 let lastSnapshot: ReturnType<typeof buildSnapshot> | null = null
+let lastInventoryOptions: { includeNonSemantic?: boolean; candidateSelector?: string } = {}
 
 /** Run page click handlers without allowing a javascript: URL default action. */
 function dispatchClickWithoutDefault(el: HTMLElement): boolean {
@@ -280,12 +289,13 @@ function dispatchClickWithoutDefault(el: HTMLElement): boolean {
 /** Invalidate delta state after navigation (new document). */
 function resetDeltaState(): void {
   lastSnapshot = null
+  lastInventoryOptions = {}
 }
 
 /** Attach the settled page change while retaining the full view as the next delta baseline. */
 function withPageDelta(text: string, ctx: ActionContext): ActionResult {
   if (ctx.includePageDelta !== true || lastSnapshot === null) return { text }
-  const view = buildSnapshot(ctx.ids, { delta: true, budget: ctx.budget }, lastSnapshot)
+  const view = buildSnapshot(ctx.ids, { delta: true, ...lastInventoryOptions, budget: ctx.budget }, lastSnapshot)
   lastSnapshot = view
   return {
     text,

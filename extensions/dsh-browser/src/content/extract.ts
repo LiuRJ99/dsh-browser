@@ -143,7 +143,7 @@ function cssEscape(value: string): string {
  * @param root - document or element to scan.
  * @returns the interactive inventory.
  */
-export function collectInteractive(root: Document | Element): Element[] {
+export function collectInteractive(root: Document | Element, includeNonSemantic = false): Element[] {
   const seen = new Set<Element>()
   const result: Element[] = []
   for (const el of root.querySelectorAll(INTERACTIVE_SELECTOR)) {
@@ -154,7 +154,36 @@ export function collectInteractive(root: Document | Element): Element[] {
     const isFileInput = el instanceof HTMLInputElement && el.type.toLowerCase() === 'file'
     if (isFileInput || isVisible(el)) result.push(el)
   }
+  if (includeNonSemantic) {
+    // A pointer inherited by a card's text/icon is not another control. Keep
+    // only the pointer boundary (or an explicit inline click handler), and
+    // never duplicate a native control or its wrapping label/container.
+    for (const el of root.querySelectorAll('*')) {
+      if (!(el instanceof HTMLElement) || seen.has(el)) continue
+      if (el.closest('[inert], [aria-hidden="true"]') !== null || !isVisible(el)) continue
+      if (el.closest(INTERACTIVE_SELECTOR) !== null || el.querySelector(INTERACTIVE_SELECTOR) !== null) continue
+      if (el instanceof HTMLLabelElement && el.control !== null) continue
+      const parent = el.parentElement
+      const pointerBoundary = getComputedStyle(el).cursor === 'pointer'
+        && (parent === null || getComputedStyle(parent).cursor !== 'pointer')
+      if (!el.hasAttribute('onclick') && !pointerBoundary) continue
+      // Empty layout boxes have neither an action name nor useful evidence.
+      if ((el.textContent ?? '').trim() === '' && !el.hasAttribute('aria-label') && !el.hasAttribute('aria-labelledby')) continue
+      let rendered = true
+      for (let ancestor = parent; ancestor !== null; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor)
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') { rendered = false; break }
+      }
+      if (rendered) { seen.add(el); result.push(el) }
+    }
+    result.sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
+  }
   return result
+}
+
+/** Whether the inventory discovered this element through the optional heuristic. */
+export function isNonSemanticControl(el: Element): boolean {
+  return !el.matches(INTERACTIVE_SELECTOR)
 }
 
 /**

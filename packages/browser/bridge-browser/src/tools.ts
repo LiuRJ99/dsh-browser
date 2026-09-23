@@ -225,14 +225,18 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
     parameters: {
       delta: { type: 'boolean', description: 'Return changes since the previous snapshot.' },
       region: { type: 'string', description: 'CSS selector or "main" to read only that region.' },
+      includeNonSemantic: { type: 'boolean', description: 'Opt in to visible named controls inferred from onclick or a pointer cursor boundary. These are labelled clickable, not semantic buttons.' },
+      candidateSelector: { type: 'string', description: 'CSS selector filtering the interactive inventory before its size cap. Does not change main text. No match produces an empty inventory.' },
     },
     timeoutMs: options.toolTimeoutMs,
     output: TEXT_OUTPUT,
     execute: (args, exec) => {
-      const a = args as { delta?: boolean; region?: string }
+      const a = args as { delta?: boolean; region?: string; includeNonSemantic?: boolean; candidateSelector?: string }
       return call(exec, 'browser_snapshot', {
         ...a.delta !== undefined ? { delta: a.delta } : {},
         ...a.region !== undefined ? { region: a.region } : {},
+        ...a.includeNonSemantic !== undefined ? { includeNonSemantic: a.includeNonSemantic } : {},
+        ...a.candidateSelector !== undefined ? { candidateSelector: a.candidateSelector } : {},
       })
     },
   })

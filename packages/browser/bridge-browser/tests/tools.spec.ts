@@ -128,6 +128,8 @@ describe('registerBrowserTools', () => {
     expect(requestTool).toHaveBeenLastCalledWith('browser_snapshot', {}, exec.signal, 1_000)
     await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({ delta: true, region: 'main' }, exec)
     expect(requestTool).toHaveBeenLastCalledWith('browser_snapshot', { delta: true, region: 'main' }, exec.signal, 1_000)
+    await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({ includeNonSemantic: true, candidateSelector: '.option, #next' }, exec)
+    expect(requestTool).toHaveBeenLastCalledWith('browser_snapshot', { includeNonSemantic: true, candidateSelector: '.option, #next' }, exec.signal, 1_000)
   })
 
   it('executes every remaining tool with mapped args', async () => {

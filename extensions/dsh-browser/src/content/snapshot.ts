@@ -10,12 +10,13 @@
  * @module
  */
 
-import { accessibleName, collectInteractive, isInViewport, isVisible, mainText, pageText, truncate } from './extract.ts'
+import { accessibleName, collectInteractive, isInViewport, isVisible, isNonSemanticControl, mainText, pageText, truncate } from './extract.ts'
 import { ElementIds } from './ids.ts'
 import { isSensitiveField, maskValue } from './privacy.ts'
 
 /** Role label per element kind (model-facing vocabulary). */
 function roleOf(el: Element): string {
+  if (isNonSemanticControl(el)) return 'clickable'
   const role = el.getAttribute('role')
   if (role !== null && role !== '') return role
   if (el instanceof HTMLAnchorElement) return 'link'
@@ -41,6 +42,9 @@ interface InventoryItem {
   disabled?: boolean
   checked?: boolean
   selected?: boolean
+  pressed?: boolean
+  /** Raw class tokens, not an inferred checked/selected meaning. */
+  domClasses?: string
   href?: string
   inViewport: boolean
 }
@@ -75,6 +79,7 @@ export interface SnapshotView {
   truncated: { mainChars: number; itemsDropped: number; formsDropped: number }
   /** 总预算（渲染封顶用）。 */
   budgetChars: number
+  inventoryScope?: { includeNonSemantic: boolean; candidateSelector?: string }
 }
 
 /** Snapshot budgets: negotiated with the plugin via hello caps. */
@@ -88,6 +93,8 @@ export interface SnapshotBudget {
 export interface SnapshotOptions {
   delta?: boolean
   region?: string
+  includeNonSemantic?: boolean
+  candidateSelector?: string
   budget: SnapshotBudget
 }
 
@@ -178,7 +185,8 @@ function openDialogOf(el: Element, isOpen: (dialog: Element) => boolean): Elemen
  * @returns the snapshot view.
  */
 export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: SnapshotView | null): SnapshotView {
-  const elements = collectInteractive(document)
+  if (options.candidateSelector !== undefined) document.querySelector(options.candidateSelector)
+  const elements = collectInteractive(document, options.includeNonSemantic === true)
   const { added, removed } = ids.assign(elements)
   // A renumbering is only meaningful relative to a previous snapshot: the
   // first snapshot on a fresh document always adds everything.
@@ -187,7 +195,9 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
   // Measure viewport and dialog membership once. Calling getBoundingClientRect
   // from a sort comparator forces repeated layout reads on large pages.
   const isOpenDialog = openDialogTest()
-  const elementViews = elements.map((element) => ({
+  const scoped = options.candidateSelector === undefined ? elements
+    : elements.filter(element => element.matches(options.candidateSelector!))
+  const elementViews = scoped.map((element) => ({
     element,
     inViewport: isInViewport(element),
     inDialog: openDialogOf(element, isOpenDialog) !== null,
@@ -221,6 +231,12 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
     }
     const ariaChecked = el.getAttribute('aria-checked')
     if (ariaChecked === 'true' || ariaChecked === 'false') item.checked = ariaChecked === 'true'
+    if (el.matches(':disabled, [aria-disabled="true"], [inert], [inert] *')) item.disabled = true
+    const ariaSelected = el.getAttribute('aria-selected')
+    if (ariaSelected === 'true' || ariaSelected === 'false') item.selected = ariaSelected === 'true'
+    const ariaPressed = el.getAttribute('aria-pressed')
+    if (ariaPressed === 'true' || ariaPressed === 'false') item.pressed = ariaPressed === 'true'
+    if (item.role === 'clickable') item.domClasses = [...el.classList].join(' ').slice(0, 160)
     if (el instanceof HTMLOptionElement && el.selected) item.selected = true
     if (el instanceof HTMLAnchorElement && el.href !== '') item.href = hrefHeadline(el.href)
     items.push(item)
@@ -228,7 +244,7 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
 
   // Form controls are already part of the visible interactive inventory, so
   // reuse that scan instead of querying, styling, and measuring them again.
-  const formElements = elements.filter((el) => el instanceof HTMLInputElement
+  const formElements = scoped.filter((el) => el instanceof HTMLInputElement
     || el instanceof HTMLSelectElement
     || el instanceof HTMLTextAreaElement)
   const forms: FormFieldView[] = []
@@ -298,10 +314,14 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
     reindexed,
     truncated: {
       mainChars: main.truncated,
-      itemsDropped: Math.max(0, elements.length - options.budget.maxItems),
+      itemsDropped: Math.max(0, scoped.length - options.budget.maxItems),
       formsDropped: Math.max(0, formElements.length - options.budget.maxForms),
     },
     budgetChars: options.budget.maxChars,
+    ...options.includeNonSemantic === true || options.candidateSelector !== undefined ? {
+      inventoryScope: { includeNonSemantic: options.includeNonSemantic === true,
+        ...options.candidateSelector === undefined ? {} : { candidateSelector: options.candidateSelector } },
+    } : {},
   }
 }
 
@@ -312,6 +332,7 @@ function selectedText(select: HTMLSelectElement): string {
 function sameItem(a: InventoryItem, b: InventoryItem): boolean {
   return a.role === b.role && a.name === b.name && a.href === b.href
     && a.disabled === b.disabled && a.checked === b.checked && a.inViewport === b.inViewport
+    && a.selected === b.selected && a.pressed === b.pressed && a.domClasses === b.domClasses
 }
 
 function sameForm(a: FormFieldView, b: FormFieldView): boolean {
@@ -337,11 +358,14 @@ function renderItem(item: InventoryItem): string {
   const state = [
     item.disabled === true ? 'disabled' : undefined,
     item.checked === undefined ? undefined : item.checked ? 'checked' : 'unchecked',
+    item.selected === undefined ? undefined : item.selected ? 'selected' : 'unselected',
+    item.pressed === undefined ? undefined : item.pressed ? 'pressed' : 'unpressed',
+    item.domClasses === undefined ? undefined : `classes=${encodeURIComponent(item.domClasses)}`,
     item.inViewport ? undefined : 'outside viewport',
   ].filter((value) => value !== undefined).join('/')
   const stateText = state === '' ? '' : ` [${state}]`
   const hrefText = item.href !== undefined ? ` → ${item.href}` : ''
-  return `  [${item.index}] ${item.role} "${item.name}"${stateText}${hrefText}`
+  return `  [${item.index}] ${item.role} ${JSON.stringify(item.name)}${stateText}${hrefText}`
 }
 
 function renderForm(form: FormFieldView, includeIdentity: boolean): string {
@@ -362,6 +386,7 @@ function appendTruncationNotes(lines: string[], view: SnapshotView): void {
 
 export function renderSnapshot(view: SnapshotView, delta: boolean, maxChars: number = view.budgetChars): string {
   const lines: string[] = []
+  if (view.inventoryScope !== undefined) lines.push(`Inventory scope: ${JSON.stringify(view.inventoryScope)}`)
   if (delta) {
     lines.push(`Page change v${view.version} (${view.url})`)
     const elementChanges = view.changed.filter((id) => id !== -1)

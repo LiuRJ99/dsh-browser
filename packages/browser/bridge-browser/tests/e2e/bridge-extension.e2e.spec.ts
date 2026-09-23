@@ -180,6 +180,52 @@ afterAll(async () => {
 })
 
 describe('extension ↔ bridge e2e', () => {
+  it('scoped non-semantic controls survive the real bridge and action delta', { timeout: 60_000 }, async () => {
+    if (browser === undefined || context === undefined) return
+    const sw = browser.serviceWorkers()[0] ?? await browser.waitForEvent('serviceworker')
+    const panel = await browser.newPage()
+    await panel.goto(`chrome-extension://${new URL(sw.url()).host}/panel/index.html`)
+    await panel.locator('button[aria-label="打开设置"]').click()
+    await panel.fill('input[placeholder*="自动检测"]', `ws://127.0.0.1:${port}`)
+    await panel.fill('input[type="password"]', TOKEN)
+    await panel.selectOption('select', 'auto')
+    await panel.click('text=保存并连接')
+    await expect.poll(() => panel.locator('.connection').textContent(), { timeout: 15_000 }).toContain('已连接')
+    const target = await browser.newPage()
+    await target.goto(`http://127.0.0.1:${port}/e2e-approval-page`)
+    await target.setContent('<main><p>Choose A</p><button>Exit</button><input value="outside"><div class="option" style="cursor:pointer" onclick="this.classList.toggle(\'selected\')">A</div></main>')
+    await target.bringToFront()
+    await target.waitForTimeout(250)
+    const follow = panel.locator('.tab-affinity button.follow')
+    if (await follow.isVisible()) await follow.click()
+    await target.bringToFront()
+    const call = (name: string, args: Record<string, unknown>) => context!.tools.execute({ callId: `scope-${name}-${Date.now()}` as never, name, arguments: args, signal: new AbortController().signal })
+    const scope = { includeNonSemantic: true, candidateSelector: '.option' }
+    const approval = panel.locator('.approval-dialog')
+    const snapshot = await call('browser_snapshot', scope)
+    if (snapshot.isError) throw new Error(snapshot.error.message)
+    const text = (snapshot.value as { text: string }).text
+    expect(text).toContain('Inventory scope:')
+    const inventory = text.split('Interactive elements:')[1]!
+    expect(inventory).toContain('clickable "A"')
+    expect(inventory).not.toContain('Exit')
+    expect(inventory).not.toContain('outside')
+    const index = Number(inventory.match(/\[(\d+)] clickable/)![1])
+    await target.bringToFront()
+    const clicking = call('browser_click', { index })
+    await approval.waitFor({ state: 'visible', timeout: 15_000 })
+    await approval.locator('button.allow').click()
+    const clicked = await clicking
+    expect(clicked.isError).toBe(false)
+    if (!clicked.isError) expect((clicked.value as { text: string }).text).toContain('classes=option%20selected')
+    await expect.poll(() => target.locator('.option').getAttribute('class')).toBe('option selected')
+    const after = await call('browser_snapshot', scope)
+    expect(after.isError).toBe(false)
+    if (!after.isError) expect((after.value as { text: string }).text).toContain('classes=option%20selected')
+    await target.close()
+    await panel.close()
+  })
+
   it('loads the extension, connects to the real bridge, and shows connected in the panel', { timeout: 120_000 }, async () => {
     if (executable === undefined) {
       console.warn('SKIP: no usable Chromium (set PLAYWRIGHT_CHROMIUM_PATH or install playwright chromium)')
