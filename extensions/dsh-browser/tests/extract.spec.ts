@@ -91,6 +91,22 @@ describe('mainText', () => {
     expect(text).not.toContain('导航垃圾')
   })
 
+  it('never reads a hidden page, however well it scores', () => {
+    // `elementText` prefers innerText, which falls back to textContent for an
+    // element that is not rendered — so a hidden page produced a long,
+    // well-paragraphed string and beat the page actually on screen.
+    document.body.innerHTML = `
+      <div id="hidden" style="display:none">
+        <p>这一页是隐藏的模式选择页，文字很长很长，长到足以在打分里胜出。</p>
+        <p>它还有第二段，所以段落数也满足要求，于是它就成了「正文」。</p>
+      </div>
+      <div id="shown"><p>这一页才是屏幕上那一页。</p><p>题干在这里。</p></div>
+    `
+    const text = mainText(document)
+    expect(text).toContain('屏幕上那一页')
+    expect(text).not.toContain('隐藏的模式选择页')
+  })
+
   it('falls back to body text without an article', () => {
     document.body.innerHTML = '<div>只有一段话的页面。</div>'
     expect(mainText(document)).toContain('只有一段话的页面')

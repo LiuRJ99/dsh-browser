@@ -167,13 +167,20 @@ export function collectInteractive(root: Document | Element): Element[] {
  */
 export function mainText(doc: Document): string {
   const main = doc.querySelector('main, [role="main"]')
-  if (main !== null) return clean(elementText(main))
+  if (main !== null && isVisible(main)) return clean(elementText(main))
   const articles = doc.querySelectorAll('article')
-  if (articles.length === 1) return clean(elementText(articles[0]!))
+  if (articles.length === 1 && isVisible(articles[0]!)) return clean(elementText(articles[0]!))
 
   let best: Element | null = null
   let bestScore = 0
   for (const candidate of doc.querySelectorAll('section, div, [role="main"]')) {
+    // Only what renders competes. `elementText` prefers `innerText`, and for an
+    // element that is not rendered the browser falls back to `textContent` —
+    // so a hidden page still produced a full-length, well-paragraphed string
+    // and could win the score. Single-page apps that toggle pages with
+    // `display: none` were read as whichever hidden page scored highest, and
+    // the page actually on screen was never read at all.
+    if (!isVisible(candidate)) continue
     const paragraphs = candidate.querySelectorAll('p').length
     if (paragraphs < 2) continue
     const text = elementText(candidate)
