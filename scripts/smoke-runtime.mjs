@@ -13,7 +13,7 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const bridge = join(root, 'packages/browser/bridge-browser')
 const require = createRequire(join(root, 'package.json'))
 const expectedVersion = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
-const cli = join(dirname(require.resolve('@deepseek-ai/dsh/package.json')), 'lib/bin.js')
+const cli = process.env.DSH_TEST_CLI ?? join(dirname(require.resolve('@deepseek-ai/dsh/package.json')), 'lib/bin.js')
 const bridgeRequire = createRequire(join(bridge, 'package.json'))
 const { default: WebSocket } = await import(pathToFileURL(bridgeRequire.resolve('ws')).href)
 const temp = await mkdtemp(join(tmpdir(), 'dsh-runtime-smoke-'))
@@ -91,8 +91,9 @@ async function start(reopen) {
   assert.equal(response.status, 200)
   const config = await response.json()
   assert.equal(config.wsUrl, base.replace('http:', 'ws:') + '/ext/bridge')
-  // Inspect what the actual profile Loader resolves, not just workspace hoists.
-  const resolve = createRequire(join(home, 'profiles/web/package.json'))
+  // Shipped Host plugins come from the CLI installation; the profile only
+  // contains user-added plugins, so resolve these against the CLI package.
+  const resolve = createRequire(cli)
   for (const name of ['dsh-session-query', 'dsh-session-projection-cache']) {
     const path = resolve.resolve(`@deepseek-ai/${name}/package.json`)
     const { version } = JSON.parse(await readFile(path, 'utf8'))

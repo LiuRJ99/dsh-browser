@@ -247,7 +247,7 @@ function decodeRecord(record: unknown): SessionEvent[] {
   throw new TypeError('session history carried an unsupported record')
 }
 
-/** Flatten target history records, including rc.1 packed chunk rows. */
+/** Flatten target history records into browser panel events. */
 export function eventsFromRecords(records: readonly unknown[]): Array<{ event: SessionEvent }> {
   const events: Array<{ event: SessionEvent }> = []
   for (const record of records) {

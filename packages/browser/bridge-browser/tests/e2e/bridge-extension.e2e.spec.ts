@@ -240,7 +240,7 @@ describe('extension ↔ bridge e2e', () => {
     const inboxInsertions: Array<{ agentId: string; message: UserMessage }> = []
     context.on('agent/inbox/inserted', ({ agent, message }) => {
       inboxInsertions.push({ agentId: String(agent.id), message })
-    })
+    }, { global: true })
     // The service worker may already be registered when launchPersistentContext
     // returns — waitForEvent would then miss it and time out; check first.
     let sw = ctx.serviceWorkers()[0]
@@ -328,13 +328,24 @@ describe('extension ↔ bridge e2e', () => {
       return { tabId: alternate.id, windowId: backgroundWindow.id }
     }, `http://127.0.0.1:${port}/e2e-approval-page`)
     await target.bringToFront()
+    // The previous test pinned a tab and then closed it. Return to following
+    // the foreground tab before invoking a tool in this shared context.
+    const follow = panel.locator('.tab-affinity button.follow')
+    if (await follow.isVisible()) await follow.click()
+    await target.bringToFront()
+    const approval = panel.locator('.approval-dialog')
+    // Following a tab can request its own context refresh for the existing
+    // session. Settle that read so the next dialog belongs to this RPC.
+    if (await approval.waitFor({ state: 'visible', timeout: 1_000 }).then(() => true, () => false)) {
+      await approval.locator('button.allow').click()
+      await approval.waitFor({ state: 'hidden', timeout: 15_000 })
+    }
     const snapshot = context.tools.execute({
       callId: 'e2e-browser-snapshot' as never,
       name: 'browser_snapshot',
       arguments: {},
       signal: new AbortController().signal,
     })
-    const approval = panel.locator('.approval-dialog')
     await Promise.race([
       approval.waitFor({ state: 'visible', timeout: 15_000 }),
       snapshot.then((result) => {
@@ -347,7 +358,7 @@ describe('extension ↔ bridge e2e', () => {
     expect(await approval.locator('button.read-always').count()).toBe(1)
     await approval.locator('button.read-always').click()
     const snapshotResult = await snapshot
-    expect(snapshotResult.isError).toBe(false)
+    expect(snapshotResult.isError, JSON.stringify(snapshotResult)).toBe(false)
     if (!snapshotResult.isError) {
       expect(snapshotResult.value).toMatchObject({ text: expect.stringContaining('UNTRUSTED_PAGE_CONTENT') })
     }
@@ -513,7 +524,7 @@ describe('extension ↔ bridge e2e', () => {
     ).toBeGreaterThanOrEqual(1)
     const sessionInbox = inboxInsertions.filter(entry => entry.agentId === createdSession.id)
     const browserContextIndex = sessionInbox.findIndex(({ message }) => {
-      return message.source.kind === 'plugin'
+      return message.source.kind === 'bridge-browser'
         && message.source.plugin === BRIDGE
         && message.source.form === 'snapshot'
     })
@@ -522,7 +533,7 @@ describe('extension ↔ bridge e2e', () => {
 
     const workspace = (context.get('workspaceRegistry') as WorkspaceRegistry).list()[0]
     expect(workspace?.path).toBe(await realpath(join(root as string, 'browser-sessions')))
-    expect(workspace?.sessionIds).toContain(createdSession.id)
+    await expect.poll(() => workspace?.sessionIds, { timeout: 15_000 }).toContain(createdSession.id)
     expect(createdSession.header.cwd).toBe(workspace?.path)
 
     // Closing the controlled tab is a distinct fail-closed state; the current
@@ -614,7 +625,7 @@ describe('extension ↔ bridge e2e', () => {
     })
     await expect.poll(() => questionCard.textContent()).toContain('Dismiss the second concurrent question.')
     await questionCard.locator('.question-actions .secondary').click()
-    expect(await secondConcurrentOutcome).toMatchObject({ ok: false, error: { code: 'ASK_CANCELLED' } })
+    expect(await secondConcurrentOutcome).toMatchObject({ ok: false, error: { code: 'cancelled' } })
     await questionCard.waitFor({ state: 'hidden', timeout: 15_000 })
 
     // Closing the panel must leave a new approval pending, surface a system

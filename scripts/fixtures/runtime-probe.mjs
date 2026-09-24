@@ -18,9 +18,12 @@ export async function apply(ctx, config) {
     }
     return
   }
-  ctx.on('session/created', async (session) => {
-    if (session.id !== config.sessionId) return
-    await ctx.sessionPersistence.ensureMaterialized(session)
-    await writeFile(config.marker, JSON.stringify({ sessionId: session.id }))
-  })
+  const timer = setInterval(() => {
+    const session = ctx.sessions.get(config.sessionId)
+    if (session === undefined) return
+    clearInterval(timer)
+    void ctx.sessions.flush(session)
+      .then(() => writeFile(config.marker, JSON.stringify({ sessionId: session.id })))
+  }, 100)
+  ctx.effect(() => () => { clearInterval(timer) })
 }

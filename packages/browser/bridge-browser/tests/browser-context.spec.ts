@@ -16,7 +16,7 @@ describe('browser page context', () => {
 
     expect(message.role).toBe('user')
     expect(message.source).toEqual({
-      kind: 'plugin',
+      kind: 'bridge-browser',
       plugin: BROWSER_CONTEXT_PLUGIN,
       form: 'snapshot',
       sections: [{

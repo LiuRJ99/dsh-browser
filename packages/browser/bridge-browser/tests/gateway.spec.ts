@@ -45,20 +45,31 @@ describe('eventsFromRecords', () => {
     ])
   })
 
-  it('unwraps and expands real DSH packed chunk records ({ type: "chunks", event })', () => {
+  it('unwraps individual DSH chunk events from history records', () => {
     const chunkRecords = [
       {
-        type: 'chunks',
+        type: 'event',
         event: {
-          type: 'chunkrow/text-chunks',
+          type: 'assistant/chunk',
           seq: 10,
           time: 5000,
           data: {
             turn: 1,
             step: 1,
-            index: 0,
-            dt: [10],
-            texts: ['chunk-1', 'chunk-2'],
+            chunk: { type: 'text-delta', index: 0, text: 'chunk-1' },
+          },
+        },
+      },
+      {
+        type: 'event',
+        event: {
+          type: 'assistant/chunk',
+          seq: 11,
+          time: 5010,
+          data: {
+            turn: 1,
+            step: 1,
+            chunk: { type: 'text-delta', index: 0, text: 'chunk-2' },
           },
         },
       },
@@ -90,7 +101,8 @@ describe('eventsFromRecords', () => {
 
   it('fails closed on malformed explicit wire envelopes', () => {
     expect(() => eventsFromRecords([{ type: 'event' }])).toThrow(/malformed/)
-    expect(() => eventsFromRecords([{ type: 'chunks', event: {} }])).toThrow(/malformed/)
+    expect(() => eventsFromRecords([{ type: 'event', event: null }])).toThrow(/malformed/)
+    expect(() => eventsFromRecords([{ type: 'chunks', event: {} }])).toThrow(/unsupported/)
   })
 
   it('handles bare events from mock/legacy inputs', () => {

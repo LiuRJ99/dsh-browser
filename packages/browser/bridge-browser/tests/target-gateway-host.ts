@@ -111,8 +111,9 @@ export const TargetGatewayHost = {
             ? { id: `workspace-${randomUUID()}`, path }
             : await registry.create(path)
           const workspaceId = String(workspace.id ?? workspace.workspaceId)
-          workspacePaths.set(workspaceId, path)
-          return { workspace: { workspaceId, path } }
+          const canonicalPath = String(workspace.path ?? path)
+          workspacePaths.set(workspaceId, canonicalPath)
+          return { workspace: { workspaceId, path: canonicalPath } }
         }
         case 'workspace/archiveSession': {
           const request = record(args.request)
@@ -137,6 +138,10 @@ export const TargetGatewayHost = {
           const state: SessionState = { session, followers: new Set(), ...(workspaceId === undefined ? {} : { workspaceId }) }
           sessions.set(sessionId, state)
           if (config.driveAgents === true) state.agent = registerTestAgent(ctx, state)
+          if (workspaceId !== undefined) {
+            const registry = ctx.get('workspaceRegistry') as { get?: (id: string) => { attachSession: (id: string) => Promise<void> } | undefined } | undefined
+            await registry?.get?.(workspaceId)?.attachSession(sessionId)
+          }
           return { sessionId }
         }
         case 'session/list': {
@@ -214,7 +219,15 @@ export const TargetGatewayHost = {
     const gateway = {
       invoke,
       stream,
-      wireStream: { open: async (_endpoint: string, _payload: unknown, signal: AbortSignal) => eventHub.open(signal) },
+      wireStream: {
+        open: async (
+          _endpoint: string,
+          _payload: unknown,
+          _uplink: AsyncIterable<unknown>,
+          _peer: unknown,
+          signal: AbortSignal,
+        ) => eventHub.open(signal),
+      },
     }
     ctx.provide('connection', connection)
     ctx.provide('typertGateway', gateway)
@@ -230,7 +243,8 @@ function registerTestAgent(ctx: Context, state: SessionState): any {
     nextStep: [] as any[],
     get hasPending() { return this.nextTurn.length > 0 || this.nextStep.length > 0 },
     append(target: 'next-turn' | 'next-step', message: any) {
-      this[target].push(message)
+      if (target === 'next-turn') this.nextTurn.push(message)
+      else this.nextStep.push(message)
     },
     clear() {
       this.nextTurn.length = 0
@@ -260,7 +274,10 @@ function registerTestAgent(ctx: Context, state: SessionState): any {
       inbox.clear()
     },
     whenIdle: async () => {},
-    inject: () => {},
+    inject(message: any) {
+      inbox.append('next-step', message)
+      emitAgentEvent(ctx, agent, 'agent/inbox/inserted', { message })
+    },
     steer: () => {},
     send: () => {},
   }

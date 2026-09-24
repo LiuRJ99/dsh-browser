@@ -181,7 +181,9 @@ describe('real Loader composition', () => {
 
     // Gateway RPC round-trip against the real session store.
     send(client.ws, { t: 'rpc', id: 'c-1', method: 'session.create', payload: { cwd: root } })
-    await waitFor(() => client.frames.some((f) => f.t === 'rpc.result' && f.id === 'c-1'))
+    await waitFor(() => client.frames.some((f) => f.t === 'rpc.result' && f.id === 'c-1')).catch(() => {
+      throw new Error(`session.create timed out; readyState=${client.ws.readyState}; frames=${JSON.stringify(client.frames)}`)
+    })
     const created = client.frames.find((f): f is Extract<BridgeFrame, { t: 'rpc.result' }> => f.t === 'rpc.result' && f.id === 'c-1')!
     expect(created.ok).toBe(true)
     const sessionId = ((created as { result: { result: { value: { sessionId: string } } } }).result).result.value.sessionId
