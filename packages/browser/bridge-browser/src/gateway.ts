@@ -14,7 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-gateway'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
-import { decodeStorageRecord, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { type SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionId } from '@deepseek-ai/dsh-session'
 
 /** One rc.1 Connection business result. */
@@ -91,7 +91,7 @@ export function createBrowserGateway(ctx: Context): BrowserGateway {
     },
     open: async (endpoint, args, signal) => {
       if (endpoint === '$events') {
-        return ctx.typertGateway.wireStream.open(endpoint, { args }, signal)
+        return ctx.typertGateway.wireStream.open(endpoint, { args }, (async function* () {})(), undefined, signal)
       }
       const split = splitEndpoint(endpoint)
       if (split === undefined) throw new Error(`invalid Remote endpoint ${JSON.stringify(endpoint)}`)
@@ -239,22 +239,12 @@ function decodeRecord(record: unknown): SessionEvent[] {
     if (!isRecord(record.event)) throw new TypeError('session history event record is malformed')
     return [record.event as unknown as SessionEvent]
   }
-  if (record.type === 'chunks') {
-    if (!isRecord(record.event) || typeof record.event.type !== 'string') {
-      throw new TypeError('session history chunks record is malformed')
-    }
-    const rawTag = record.event.type.startsWith('chunkrow/')
-      ? record.event.type.slice('chunkrow/'.length)
-      : record.event.type
-    const row = {
-      type: rawTag,
-      seq0: record.event.seq,
-      time0: record.event.time,
-      data: record.event.data,
-    }
-    return decodeStorageRecord(row)
+  // The 0.1.7 session wire sends one event per history record. Older packed
+  // chunk rows are decoded by the Host before reaching this endpoint.
+  if (typeof record.type === 'string' && typeof record.seq === 'number') {
+    return [record as unknown as SessionEvent]
   }
-  return decodeStorageRecord(record)
+  throw new TypeError('session history carried an unsupported record')
 }
 
 /** Flatten target history records, including rc.1 packed chunk rows. */

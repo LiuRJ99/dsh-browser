@@ -231,7 +231,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // (user /browser gesture): while locked, they stay queued and are delivered
   // by activate/flush once the gate opens. See BrowserContextInjector.
   const browserContext = new BrowserContextInjector(ctx.agents, undefined, (agent) => browserCapabilityOpen(ctx, agent))
-  ctx.on('agent/session-start', ({ agent }) => { browserContext.activate(agent) })
+  ctx.on('agent/created', ({ agent }) => { browserContext.activate(agent) })
   // Re-check the gate before every model step: a session unlocked since the
   // last step (including a subagent inheriting its parent's unlock) picks up
   // its queued snapshot here.

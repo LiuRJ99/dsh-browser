@@ -3,7 +3,7 @@
  *
  * The extension captures the page immediately after the user chooses to
  * follow it. A live Agent receives that snapshot at once; a deferred session
- * keeps only its newest snapshot until `agent/session-start` publishes the
+ * keeps only its newest snapshot until `agent/created` publishes the
  * Agent. Injection deliberately does not wake an idle Agent — the snapshot is
  * claimed together with the user's next message.
  *
@@ -19,6 +19,13 @@
 
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContextFormed } from '@deepseek-ai/dsh-llm'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'bridge-browser': { kind: 'bridge-browser'; plugin: string } & ContextFormed
+  }
+}
 
 /** Provenance key used for snapshot supersession and transcript presentation. */
 export const BROWSER_CONTEXT_PLUGIN = '@yuxianglin/dsh-bridge-browser'
@@ -44,7 +51,7 @@ export function createBrowserSnapshotMessage(snapshot: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
     source: {
-      kind: 'plugin',
+      kind: 'bridge-browser',
       plugin: BROWSER_CONTEXT_PLUGIN,
       form: 'snapshot',
       sections: [{ name: 'browser-page', text }],
@@ -92,7 +99,7 @@ export class BrowserContextInjector {
 
   /**
    * Flush one session's queued snapshot at a supported delivery boundary
-   * (`agent/session-start`, every pre-step, or an explicit unlock notice):
+   * (`agent/created`, every pre-step, or an explicit unlock notice):
    * the snapshot is injected only once the Agent is live and the gate opens.
    */
   activate(agent: Agent): boolean {
