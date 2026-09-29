@@ -91,6 +91,8 @@ async function start(reopen) {
     `        sessionId: ${JSON.stringify(sessionId)}`,
     `        marker: ${JSON.stringify(marker)}`,
     `        reopen: ${reopen}`,
+    `        profileManifest: ${JSON.stringify(join(home, 'profiles/web/package.json'))}`,
+    `        expectedVersion: ${JSON.stringify(expectedVersion)}`,
     '',
   ].join('\n'))
   hostLog = ''
@@ -109,14 +111,6 @@ async function start(reopen) {
   assert.equal(response.status, 200)
   const config = await response.json()
   assert.equal(config.wsUrl, base.replace('http:', 'ws:') + '/ext/bridge')
-  // Inspect what the actual profile Loader resolves, not just workspace hoists.
-  const resolve = createRequire(join(home, 'profiles/web/package.json'))
-  for (const name of ['dsh-session-query', 'dsh-session-projection-cache']) {
-    const path = resolve.resolve(`@deepseek-ai/${name}/package.json`)
-    const { version } = JSON.parse(await readFile(path, 'utf8'))
-    console.log(`Host ${name}@${version}: ${path}`)
-    assert.equal(version, expectedVersion, `Profile resolved an incompatible ${name} at ${path}`)
-  }
   // Firefox-style origin requires a valid token even on loopback.
   socket = new WebSocket(config.wsUrl, { origin: 'moz-extension://runtime-smoke', handshakeTimeout: 10_000 })
   const frames = []
