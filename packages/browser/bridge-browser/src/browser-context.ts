@@ -3,7 +3,7 @@
  *
  * The extension captures the page immediately after the user chooses to
  * follow it. A live Agent receives that snapshot at once; a deferred session
- * keeps only its newest snapshot until `agent/session-start` publishes the
+ * keeps only its newest snapshot until `agent/created` publishes the
  * Agent. Live inboxes also keep only the newest unclaimed browser snapshot.
  * Injection deliberately does not wake an idle Agent — the snapshot is
  * claimed together with the user's next message.
@@ -27,7 +27,7 @@ declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'plugin:@yuxianglin/dsh-bridge-browser': {
       kind: 'plugin:@yuxianglin/dsh-bridge-browser'
-      plugin: string
+      plugin?: string
       form: 'snapshot'
       sections: readonly import('@deepseek-ai/dsh-llm').ContextSnapshotSection[]
     }
@@ -61,11 +61,11 @@ export function createBrowserSnapshotMessage(snapshot: string): UserMessage {
 /** Supersede pending tab context through the durable Inbox command surface. */
 function injectLatestSnapshot(agent: Agent, snapshot: string): void {
   for (const message of agent.inbox.nextStep) {
-    // Widened read: `kind: 'plugin'` is retired in the v4 source union, but
-    // legacy messages injected under DSH 0.1.5 may still carry it.
+    // V3-to-V4 migration moves the producer identity into kind and drops
+    // source.plugin. Unmigrated legacy wrappers still need that field.
     const source = message.source as { kind?: string; plugin?: string; form?: string }
-    if ((source.kind === 'plugin' || source.kind === 'plugin:@yuxianglin/dsh-bridge-browser')
-      && source.plugin === BROWSER_CONTEXT_PLUGIN
+    if ((source.kind === 'plugin:@yuxianglin/dsh-bridge-browser'
+      || (source.kind === 'plugin' && source.plugin === BROWSER_CONTEXT_PLUGIN))
       && source.form === 'snapshot') {
       agent.inbox.remove(message.id)
     }

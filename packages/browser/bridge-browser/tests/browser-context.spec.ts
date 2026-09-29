@@ -42,6 +42,29 @@ describe('browser page context', () => {
     expect(agent.inject.mock.calls[0]![0].content[0].text).toContain('Live page')
   })
 
+  it('supersedes legacy browser snapshots while preserving other producers and input forms', () => {
+    const remove = vi.fn()
+    const agent = {
+      id: 'session-legacy',
+      inbox: {
+        nextStep: [
+          { id: 'old-page', source: { kind: 'plugin', plugin: BROWSER_CONTEXT_PLUGIN, form: 'snapshot' } },
+          { id: 'other-plugin', source: { kind: 'plugin', plugin: 'another-plugin', form: 'snapshot' } },
+          { id: 'other-producer', source: { kind: 'plugin:another-plugin', form: 'snapshot' } },
+          { id: 'human', source: { kind: 'human' } },
+          { id: 'browser-note', source: { kind: `plugin:${BROWSER_CONTEXT_PLUGIN}`, form: 'append' } },
+        ],
+        remove,
+      },
+      inject: vi.fn(),
+    } as unknown as Agent
+    const injector = new BrowserContextInjector({ get: () => agent } as unknown as Pick<AgentRegistry, 'get'>)
+
+    injector.inject('session-legacy', 'Current page')
+
+    expect(remove).toHaveBeenCalledExactlyOnceWith('old-page')
+  })
+
   it('retains only the latest snapshot until a deferred Agent starts', () => {
     const agent = fakeAgent('session-later')
     const agents = { get: vi.fn(() => undefined) } as unknown as Pick<AgentRegistry, 'get'>
