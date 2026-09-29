@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
 import {
-  BROWSER_CONTEXT_PLUGIN,
+  BROWSER_CONTEXT_KIND,
   BrowserContextInjector,
   createBrowserSnapshotMessage,
 } from '../src/browser-context.ts'
@@ -16,8 +16,7 @@ describe('browser page context', () => {
 
     expect(message.role).toBe('user')
     expect(message.source).toEqual({
-      kind: 'plugin:@yuxianglin/dsh-bridge-browser',
-      plugin: BROWSER_CONTEXT_PLUGIN,
+      kind: BROWSER_CONTEXT_KIND,
       form: 'snapshot',
       sections: [{
         name: 'browser-page',
@@ -40,29 +39,6 @@ describe('browser page context', () => {
     expect(injector.inject('session-live', 'Live page')).toBe('injected')
     expect(agent.inject).toHaveBeenCalledOnce()
     expect(agent.inject.mock.calls[0]![0].content[0].text).toContain('Live page')
-  })
-
-  it('supersedes legacy browser snapshots while preserving other producers and input forms', () => {
-    const remove = vi.fn()
-    const agent = {
-      id: 'session-legacy',
-      inbox: {
-        nextStep: [
-          { id: 'old-page', source: { kind: 'plugin', plugin: BROWSER_CONTEXT_PLUGIN, form: 'snapshot' } },
-          { id: 'other-plugin', source: { kind: 'plugin', plugin: 'another-plugin', form: 'snapshot' } },
-          { id: 'other-producer', source: { kind: 'plugin:another-plugin', form: 'snapshot' } },
-          { id: 'human', source: { kind: 'human' } },
-          { id: 'browser-note', source: { kind: `plugin:${BROWSER_CONTEXT_PLUGIN}`, form: 'append' } },
-        ],
-        remove,
-      },
-      inject: vi.fn(),
-    } as unknown as Agent
-    const injector = new BrowserContextInjector({ get: () => agent } as unknown as Pick<AgentRegistry, 'get'>)
-
-    injector.inject('session-legacy', 'Current page')
-
-    expect(remove).toHaveBeenCalledExactlyOnceWith('old-page')
   })
 
   it('retains only the latest snapshot until a deferred Agent starts', () => {
