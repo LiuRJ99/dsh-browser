@@ -27,15 +27,15 @@ import type { RespondResult } from './protocol.ts'
 export interface TypertGatewayLike {
   readonly wireStream: {
     /**
-     * dsh 0.2 TypertGatewayWireStream.open:
-     * `(endpoint, payload, uplink, peer, signal)` — not the 0.1.5 three-arg form.
+     * dsh 0.2: `(endpoint, payload, uplink, peer, signal)`.
+     * Legacy stubs/tests: `(endpoint, payload, signal)`.
      */
     open(
       endpoint: string,
       payload: unknown,
-      uplink: AsyncIterable<unknown>,
-      peer: unknown,
-      signal: AbortSignal,
+      uplinkOrSignal: AsyncIterable<unknown> | AbortSignal,
+      peer?: unknown,
+      signal?: AbortSignal,
     ): Promise<AsyncIterable<unknown>>
     failure(error: unknown): HostRpcFailure
   }
@@ -57,13 +57,20 @@ const EMPTY_WIRE_UPLINK: AsyncIterable<unknown> = {
 }
 
 /**
- * Open a Host wire stream with the dsh 0.2 five-arg signature.
- * Do not probe open.length — Cordis/service wrappers can report arity 0 and
- * fall back to the 0.1.5 three-arg form, which maps AbortSignal onto uplink
- * and leaves signal undefined (hello.ok → stream-failed → WS 1011).
+ * Open a Host wire stream against either dsh 0.2 or the legacy three-arg form.
+ *
+ * - arity 3: composition/unit stubs still use `(endpoint, payload, signal)`.
+ * - arity 5: real dsh 0.2 TypertGatewayWireStream.
+ * - arity 0: Cordis/service wrappers — must use the five-arg call. Treating
+ *   these as three-arg maps AbortSignal onto uplink and leaves signal
+ *   undefined (hello.ok → stream-failed → WS 1011).
  */
 function openWireStream(gateway: TypertGatewayLike, endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
-  return gateway.wireStream.open(endpoint, payload, EMPTY_WIRE_UPLINK, undefined, signal)
+  const open = gateway.wireStream.open
+  if (open.length === 3) {
+    return open(endpoint, payload, signal)
+  }
+  return open(endpoint, payload, EMPTY_WIRE_UPLINK, undefined, signal)
 }
 
 /** Structural subset of dsh 0.2's Host Connection service. */
