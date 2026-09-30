@@ -32,6 +32,7 @@ import { createSessionFormatV3ToV4 } from '@deepseek-ai/dsh-session-format-v3-to
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as BridgeBrowser from '../src/index.ts'
 import { BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD, BRIDGE_PATH, type BridgeFrame } from '../src/protocol.ts'
+import { BROWSER_CONTEXT_KIND } from '../src/browser-context.ts'
 
 const BRIDGE = '@yuxianglin/dsh-bridge-browser'
 const TOKEN = 'abcdabcdabcdabcdabcdabcdabcdabcd'
@@ -259,7 +260,7 @@ describe('real Loader composition', () => {
 
     if (snapshotKind === 'migrated') {
       // Exercise the published V3-to-V4 conversion of a durable pending
-      // snapshot, including removal of the retired source.plugin field.
+      // snapshot under the 0.2 browser-context producer kind.
       const snapshot = agent.inbox.nextStep[0]!
       const queued = agent.session.snapshotEvents().find(event => event.type === 'agent/inbox/spliced')!
       const migration = createSessionFormatV3ToV4([])
@@ -280,11 +281,11 @@ describe('real Loader composition', () => {
       stage.transformEvent({
         ...queued,
         seq: 0,
-        data: { ...queued.data, inserted: [{ ...snapshot, source: { ...snapshot.source, kind: 'plugin', plugin: BRIDGE } }] },
+        data: { ...queued.data, inserted: [{ ...snapshot, source: { ...snapshot.source, kind: BROWSER_CONTEXT_KIND } }] },
       }, output)
       stage.finish(output)
       expect(restored).toHaveLength(1)
-      expect(restored[0]!.source.kind).toBe(`plugin:${BRIDGE}`)
+      expect(restored[0]!.source.kind).toBe(BROWSER_CONTEXT_KIND)
       expect(restored[0]!.source).not.toHaveProperty('plugin')
       agent.inbox.remove(snapshot.id)
       agent.inbox.append('next-step', restored[0]!)

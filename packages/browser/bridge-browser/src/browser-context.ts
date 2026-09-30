@@ -12,30 +12,19 @@
  */
 
 import type { Agent, AgentRegistry } from '@deepseek-ai/dsh-agent'
-import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContextFormed, type UserMessage } from '@deepseek-ai/dsh-llm'
 
-/**
- * DSH 0.1.7 moved injected messages to producer-owned source kinds: the v4
- * session format rejects the retired `kind: 'plugin'` wrapper
- * ("format v4 message requires a producer-owned source kind"). The bridge's
- * own kind mirrors the canonical v3→v4 migration mapping
- * (`plugin:<package>`), and the extension declares it on
- * {@link import('@deepseek-ai/dsh-llm').MessageSourceMap} so the merge-
- * extensible source union stays type-safe.
- */
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
-    'plugin:@yuxianglin/dsh-bridge-browser': {
-      kind: 'plugin:@yuxianglin/dsh-bridge-browser'
-      plugin?: string
-      form: 'snapshot'
-      sections: readonly import('@deepseek-ai/dsh-llm').ContextSnapshotSection[]
-    }
+    /** Followed-tab browser page snapshot owned by bridge-browser. */
+    'browser-context': {
+      kind: 'browser-context'
+    } & ContextFormed
   }
 }
 
-/** Provenance key used for snapshot supersession and transcript presentation. */
-export const BROWSER_CONTEXT_PLUGIN = '@yuxianglin/dsh-bridge-browser'
+/** MessageSource.kind for snapshot supersession and transcript presentation. */
+export const BROWSER_CONTEXT_KIND = 'browser-context' as const
 
 /** Bound orphaned provisional sessions while retaining normal recent tabs. */
 const DEFAULT_MAX_PENDING = 32
@@ -50,8 +39,7 @@ export function createBrowserSnapshotMessage(snapshot: string): UserMessage {
   return createUserMessage({
     content: [{ type: 'text', text }],
     source: {
-      kind: 'plugin:@yuxianglin/dsh-bridge-browser',
-      plugin: BROWSER_CONTEXT_PLUGIN,
+      kind: BROWSER_CONTEXT_KIND,
       form: 'snapshot',
       sections: [{ name: 'browser-page', text }],
     },
@@ -61,12 +49,8 @@ export function createBrowserSnapshotMessage(snapshot: string): UserMessage {
 /** Supersede pending tab context through the durable Inbox command surface. */
 function injectLatestSnapshot(agent: Agent, snapshot: string): void {
   for (const message of agent.inbox.nextStep) {
-    // V3-to-V4 migration moves the producer identity into kind and drops
-    // source.plugin. Unmigrated legacy wrappers still need that field.
-    const source = message.source as { kind?: string; plugin?: string; form?: string }
-    if ((source.kind === 'plugin:@yuxianglin/dsh-bridge-browser'
-      || (source.kind === 'plugin' && source.plugin === BROWSER_CONTEXT_PLUGIN))
-      && source.form === 'snapshot') {
+    if (message.source.kind === BROWSER_CONTEXT_KIND
+      && message.source.form === 'snapshot') {
       agent.inbox.remove(message.id)
     }
   }

@@ -1,5 +1,5 @@
 /**
- * dsh 0.1.5 Host adapter.
+ * dsh 0.2 Host adapter.
  *
  * Unary calls go directly through TypertGateway. Long-lived Session and
  * forwarded-event streams use the Gateway wire seam, while `$events/result`
@@ -23,10 +23,20 @@ import {
 } from './extension-sessions.ts'
 import type { RespondResult } from './protocol.ts'
 
-/** Structural subset of dsh 0.1.5's Host TypertGateway service. */
+/** Structural subset of dsh 0.2's Host TypertGateway service. */
 export interface TypertGatewayLike {
   readonly wireStream: {
-    open(endpoint: string, payload: unknown, signalOrUplink: AbortSignal | AsyncIterable<unknown>, peer?: unknown, signal?: AbortSignal): Promise<AsyncIterable<unknown>>
+    /**
+     * dsh 0.2: `(endpoint, payload, uplink, peer, signal)`.
+     * Legacy stubs/tests: `(endpoint, payload, signal)`.
+     */
+    open(
+      endpoint: string,
+      payload: unknown,
+      uplinkOrSignal: AsyncIterable<unknown> | AbortSignal,
+      peer?: unknown,
+      signal?: AbortSignal,
+    ): Promise<AsyncIterable<unknown>>
     failure(error: unknown): HostRpcFailure
   }
   invoke(request: {
@@ -37,17 +47,33 @@ export interface TypertGatewayLike {
   }): Promise<unknown>
 }
 
-/** DSH Desktop 2.x added an uplink and peer before the stream signal. */
-function openWireStream(gateway: TypertGatewayLike, endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
-  const open = gateway.wireStream.open
-  if (open.length >= 5) {
-    const uplink = { async *[Symbol.asyncIterator](): AsyncGenerator<unknown> {} }
-    return open(endpoint, payload, uplink, undefined, signal)
-  }
-  return open(endpoint, payload, signal)
+/**
+ * Empty Client→Host uplink for in-process Host wireStream.open calls.
+ * dsh 0.2 requires the uplink slot; Gateway-owned endpoints ($events) discard
+ * it immediately, and Remote streams still need a valid AsyncIterable.
+ */
+const EMPTY_WIRE_UPLINK: AsyncIterable<unknown> = {
+  async *[Symbol.asyncIterator]() { /* no uplink items */ },
 }
 
-/** Structural subset of dsh 0.1.5's Host Connection service. */
+/**
+ * Open a Host wire stream against either dsh 0.2 or the legacy three-arg form.
+ *
+ * - arity 3: composition/unit stubs still use `(endpoint, payload, signal)`.
+ * - arity 5: real dsh 0.2 TypertGatewayWireStream.
+ * - arity 0: Cordis/service wrappers — must use the five-arg call. Treating
+ *   these as three-arg maps AbortSignal onto uplink and leaves signal
+ *   undefined (hello.ok → stream-failed → WS 1011).
+ */
+function openWireStream(gateway: TypertGatewayLike, endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+  const open = gateway.wireStream.open
+  if (open.length === 3) {
+    return open(endpoint, payload, signal)
+  }
+  return open(endpoint, payload, EMPTY_WIRE_UPLINK, undefined, signal)
+}
+
+/** Structural subset of dsh 0.2's Host Connection service. */
 export interface HostConnectionLike {
   createSharedFetchHandler(channel: '/api'): {
     fetch(request: Request): Promise<Response>
@@ -76,7 +102,7 @@ interface PendingQuestion {
   settled: boolean
 }
 
-/** Build the dsh 0.1.5 Host implementation. */
+/** Build the dsh 0.2 Host implementation. */
 export function createRemoteHostApi(
   gateway: TypertGatewayLike,
   connection: HostConnectionLike,
