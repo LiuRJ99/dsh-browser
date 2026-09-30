@@ -177,7 +177,8 @@ try {
   const history = await rpc('session.history', { sessionId })
   assert.ok(Array.isArray(history.events))
   const injected = history.events.flatMap(({ event }) => event.type === 'agent/inbox/spliced' ? event.data.inserted : [])
-    .find(message => message.source.kind === 'plugin:@yuxianglin/dsh-bridge-browser')
+    .find(message => message.source.kind === 'browser-context')
+  // DSH 0.2 producer-owned kinds use `browser-context` (not plugin:<package>).
   assert.ok(injected, 'the live inbox must retain the producer-owned browser snapshot')
   assert.ok(injected.content.some(block => block.type === 'text' && block.text.includes('runtime smoke snapshot')))
   const migrated = await rpc('session.history', { sessionId: legacySessionId })
