@@ -7,7 +7,7 @@
  * @module
  */
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { BRIDGE_SESSION_PURGE_METHOD, DEFAULT_SNAPSHOT_MAX_CHARS } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import type { BridgeCaps } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import type { ServerFrame } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
@@ -887,9 +887,11 @@ export function App(): React.JSX.Element {
   }, [queuedApproval?.id, queuedApproval?.sessionId, sessionChanging, state])
 
   // Stick to the newest row only while the user is already near the bottom.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!atBottomRef.current) return
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
+    // Scroll before ResizeObserver measures new content, without intermediate
+    // smooth-scroll events disabling follow while content keeps growing.
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'instant' })
   }, [rows, streamRow, working])
 
   // Sibling chrome (session picker, question card, errors, attachments) can
