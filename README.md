@@ -10,6 +10,12 @@ Connect [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) to t
 
 Browser operation remains text-only: pages become structured text with a numbered inventory of interactive elements, and the model addresses those elements by number. dsh 0.1.1 multimodal chat is separate from that page channel—the side panel accepts PNG, JPEG, WebP, and GIF attachments when the host advertises image support, while browser tools still never capture screenshots.
 
+## DSH 0.2.0-rc.2 candidate adaptation
+
+Current source version: `0.1.12-dev.1 (bridge 0.0.12-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
+
+532 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
+
 ## Quick install
 
 The standard `dsh plugin` command alone cannot install this project. The integration contains both a dsh bridge plugin and a browser extension. The one-line installer currently sets up the Chrome build.

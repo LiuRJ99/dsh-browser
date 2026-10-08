@@ -10,6 +10,12 @@
 
 浏览器操作仍采用纯文本设计：页面会转换为结构化文本和带编号的交互元素清单，模型通过编号定位元素。dsh 0.1.1 的多模态对话走独立通道——宿主声明图片能力时，侧栏可发送 PNG、JPEG、WebP 和 GIF；浏览器工具本身仍不会截取页面截图。
 
+## DSH 0.2.0-rc.2 候选适配
+
+当前源码版本：`0.1.12-dev.1 (bridge 0.0.12-dev.1)`。DSH 兼容声明精确固定到 `0.2.0-rc.2`，未验证 `0.2.1-alpha.1`。以下旧 release/tag 示例保留为历史说明；本轮验证请使用 [插件目录的固定提交和本地验证说明](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md)，不要安装旧 tag 或裸 npm 包名。
+
+532 项测试、类型检查、Chrome 构建及完整官方 npm Host 烟雾测试通过；覆盖桥发现、token 认证和重启后的会话恢复。
+
 ## 快速安装
 
 本项目不能只使用标准的 `dsh plugin` 命令安装。它同时包含 dsh bridge plugin 和浏览器扩展。一行安装器目前会安装 Chrome 构建。
