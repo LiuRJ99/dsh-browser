@@ -12,9 +12,9 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.12-dev.1 (bridge 0.0.12-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
+Current source version: `0.1.13-dev.1 (bridge 0.0.13-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
 
-532 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
+540 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
 
 ## Quick install
 
@@ -232,3 +232,5 @@ Notes:
 - Text you highlight is captured only while a side panel is open and page sharing is not `off`, and never from password or payment-card fields. It stays inside the extension until you send the message, is dropped when you dismiss it or its page navigates or closes, and reaches the model inside the same untrusted-content boundary as page snapshots — including its source title and URL, which the page also controls.
 - Page-authored text is wrapped as untrusted input. The default `auto` mode reads only the controlled tab without an extra prompt; privacy-sensitive users can select `ask` for per-read confirmation or `off` to block reads entirely. In `ask` mode, the read dialog can allow one read or persistently switch back to `auto`; this can be reversed in Settings. Read page text is sent to the selected model.
 - Click, type, file-upload, keypress, ordinary navigation, JavaScript execution, and reload calls use the same origin trust path. History navigation remains session-only because its destination is unknown; tab attach/follow use the target tab's origin trust. `browser_close_tab` always prompts. `browser_list_tabs` follows the page-sharing policy (`auto` silent, `ask` confirmed, `off` blocked). File uploads use the same destination-origin trust policy, while local paths remain redacted in approval summaries. Explicit cross-origin `browser_navigate` calls still require every known origin to be trusted, and unknown history destinations use the session grant.
+
+`browser_open_tab` accepts `active:false` to keep the visible tab in front while controlling the new background tab. Approval and session isolation still apply.

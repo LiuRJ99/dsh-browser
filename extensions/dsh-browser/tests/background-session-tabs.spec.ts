@@ -378,6 +378,40 @@ describe('per-session tab management and isolation', () => {
     })
   })
 
+  it.each(['background-session', 'another-session'])('opens a background tab for %s through the real worker without stealing focus or losing session isolation', async (callingSession) => {
+    const chromeMock = mockChrome()
+    const { panel, ws } = await prepareToolApprovalTest(chromeMock, 'background-session')
+    // Preserve an unrelated foreground tab while the session opens its target.
+    chromeMock.onActivated.emit({ tabId: 1, windowId: 1 })
+    await vi.waitFor(() => { expect(affinityStates(panel.postMessage).at(-1)?.active?.tabId).toBe(1) })
+    panel.postMessage.mockClear()
+    ws.receive({ t: 'tool.call', id: 'background-open', name: 'browser_open_tab',
+      args: { url: 'https://opened.example/path', active: false }, sessionId: callingSession,
+      expiresAt: Date.now() + 10000 })
+    await vi.waitFor(() => {
+      expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
+    })
+    const approval = panel.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; request?: { id?: string } })
+      .find(message => message.type === 'approval.request')
+    panel.onMessage.emit({ type: 'approval.response', id: approval?.request?.id, decision: 'allow-once' })
+    await vi.waitFor(() => { expect(chromeMock.update).toHaveBeenCalledWith(12, { url: 'https://opened.example/path' }) })
+    chromeMock.onMessage.emit({ type: 'DSH_CONTENT_READY' },
+      { tab: { id: 12 }, frameId: 0, url: 'https://opened.example/path' } as chrome.runtime.MessageSender, () => {})
+    await vi.waitFor(() => {
+      expect(ws.sent.map(raw => JSON.parse(raw))).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'background-open', ok: true }))
+      expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({ controlled: { tabId: callingSession === 'background-session' ? 12 : 11 }, active: { tabId: 1 } })
+    })
+    expect(chromeMock.create).toHaveBeenCalledWith({ active: false, windowId: 1 })
+    expect(chromeMock.remove).not.toHaveBeenCalledWith(11) // This fixture's previous tab has page content.
+    expect(chromeMock.remove).not.toHaveBeenCalledWith(1)
+    chromeMock.sendMessage.mockClear()
+    ws.receive({ t: 'tool.call', id: 'background-snapshot', name: 'browser_snapshot', args: {},
+      sessionId: callingSession, expiresAt: Date.now() + 10000 })
+    await vi.waitFor(() => { expect(chromeMock.sendMessage).toHaveBeenCalledWith(12, expect.objectContaining({ type: 'DSH_ACTION' }), expect.anything()) })
+    expect(chromeMock.sendMessage.mock.calls.every(([id]) => id === 12)).toBe(true)
+  })
+
   it('recreates a dedicated tab when a session tab was closed and a new tool call arrives', async () => {
     const chromeMock = mockChrome()
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ wsUrl: 'ws://127.0.0.1:3080/ext/bridge' }), { status: 200 })))

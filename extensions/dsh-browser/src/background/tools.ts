@@ -878,6 +878,7 @@ export async function dispatchOpenTab(
   if (parsed === undefined) {
     return { ok: false, error: { code: 'action-failed', message: 'url must be a complete http or https URL.' } }
   }
+  const active = call.args.active !== false
   const approval = approvalPromptForCall(call, sharePageContent, [])
   if (approval !== undefined) {
     const authorization = authorize === undefined ? 'unavailable' : await authorize(approval)
@@ -887,7 +888,7 @@ export async function dispatchOpenTab(
 
   let created: chrome.tabs.Tab
   try {
-    created = await chrome.tabs.create({ active: true, windowId })
+    created = await chrome.tabs.create({ active, windowId })
   } catch (error: unknown) {
     return { ok: false, error: { code: 'action-failed', message: error instanceof Error ? error.message : 'Failed to open a new browser tab.' } }
   }
@@ -921,7 +922,7 @@ export async function dispatchOpenTab(
   resetTabSnapshot(tabId)
   if (!targetStillAllowed(tabId)) return targetChanged()
 
-  const status = `Opened a new tab at ${parsed.href}.`
+  const status = active ? `Opened a new tab at ${parsed.href}.` : `Opened a new background tab at ${parsed.href}.`
   if (!ready || sharePageContent === 'off' || isCancelled(call, signal)) {
     return { ok: true, result: { text: sharePageContent === 'off'
       ? `${status} Page content sharing is disabled, so no snapshot was captured.`

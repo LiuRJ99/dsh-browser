@@ -40,6 +40,7 @@ import {
 } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import type { ServerFrame } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import { BRIDGE_CONFIG_PATH, BRIDGE_PATH } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
+import { bindOpenedTabAffinity } from './open-tab-binding.ts'
 import { BridgeClient, type BridgeState } from './bridge.ts'
 import { createRpc } from './rpc.ts'
 import {
@@ -938,15 +939,21 @@ async function followSelectedTab(tab: chrome.tabs.Tab, sessionId?: string): Prom
 }
 
 /** Commit a newly opened tab to the current session, preserving dedicated-tab isolation. */
-function bindOpenedTab(tab: chrome.tabs.Tab, sessionId?: string): boolean {
+function bindOpenedTab(tab: chrome.tabs.Tab, sessionId?: string, options: { active?: boolean } = {}): boolean {
   const summary = summarizeTab(tab)
   if (summary === null) return false
   const sid = sessionId ?? tabAffinity.focusedSession()
   if (sid !== undefined && sid !== null && sid.trim() !== '') {
     const previous = tabAffinity.attachSessionTab(sid, summary)
     removeOrphanBlankTab(previous, summary.tabId)
-  } else {
-    tabAffinity.rebindActive(summary)
+  }
+  // A tool call from another session may update its own target, but must
+  // not replace the visible panel session's controlled/active binding.
+  if (sid === undefined || sid === null || tabAffinity.focusedSession() === sid) {
+    bindOpenedTabAffinity(tabAffinity, summary, {
+      active: options.active,
+      ...(sid === undefined || sid === null ? {} : { sessionId: sid }),
+    })
   }
   resetTabSnapshot(summary.tabId)
   persistTabAffinity()
@@ -1299,7 +1306,7 @@ function routeToolCall(call: ToolCall): void {
           budget,
           (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
           controller.signal,
-          (tab) => bindOpenedTab(tab, call.sessionId),
+          (tab) => bindOpenedTab(tab, call.sessionId, { active: call.args.active !== false }),
           (tabId) => tabAffinity.allowsTarget(tabId, call.sessionId),
           commitAction,
         )))

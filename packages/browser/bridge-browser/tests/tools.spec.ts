@@ -47,6 +47,17 @@ describe('registerBrowserTools', () => {
     for (const dispose of disposers.values()) dispose()
   })
 
+  it('passes explicit background opens and exposes the optional activation flag', async () => {
+    const { ctx, bridge, requestTool, registered } = makeHarness()
+    registerBrowserTools(ctx, bridge, { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60 })
+    const tool = registered.find(r => r.name === 'browser_open_tab')!
+    const exec = { signal: new AbortController().signal, agent: { id: 'session-background' } }
+    const args = { url: 'https://docs.example/', active: false }
+    await (tool.definition.execute as (args: unknown, exec: unknown) => Promise<unknown>)(args, exec)
+    expect(requestTool).toHaveBeenCalledWith('browser_open_tab', args, exec.signal, 1_000, 'session-background')
+    expect(tool.definition.parameters).toMatchObject({ properties: { active: { type: 'boolean' } } })
+  })
+
   it('executes browser_click with mapped args', async () => {
     const { ctx, bridge, requestTool, registered } = makeHarness()
     registerBrowserTools(ctx, bridge, { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60 })
