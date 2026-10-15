@@ -12,9 +12,13 @@
 
 ## DSH 0.2.0-rc.2 候选适配
 
-当前源码版本：`0.1.13-dev.1 (bridge 0.0.13-dev.1)`。DSH 兼容声明精确固定到 `0.2.0-rc.2`，未验证 `0.2.1-alpha.1`。以下旧 release/tag 示例保留为历史说明；本轮验证请使用 [插件目录的固定提交和本地验证说明](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md)，不要安装旧 tag 或裸 npm 包名。
+当前源码版本：`0.1.14-dev.1 (bridge 0.0.14-dev.1)`。DSH 兼容声明精确固定到 `0.2.0-rc.2`，未验证 `0.2.1-alpha.1`。以下旧 release/tag 示例保留为历史说明；本轮验证请使用 [插件目录的固定提交和本地验证说明](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md)，不要安装旧 tag 或裸 npm 包名。
 
-540 项测试、类型检查、Chrome 构建及完整官方 npm Host 烟雾测试通过；覆盖桥发现、token 认证和重启后的会话恢复。
+545 项测试、类型检查、Chrome 构建及完整官方 npm Host 烟雾测试通过；覆盖桥发现、token 认证和重启后的会话恢复。
+
+### 面板滚动修复
+
+`v0.1.14-dev.1` 选择性吸收 `afa360b`、`5513239` 和 `aff85fb` 的面板滚动部分：阅读历史时不再强制跳到底部，提供回到底部按钮，并同步面板尺寸变化。保留 fork 的网关、会话绑定及权限检查。
 
 ## 快速安装
 

@@ -12,9 +12,13 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.13-dev.1 (bridge 0.0.13-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
+Current source version: `0.1.14-dev.1 (bridge 0.0.14-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
 
-540 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
+545 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
+
+### Panel scrolling update
+
+Release `v0.1.14-dev.1` selectively adapts upstream `afa360b`, `5513239`, and the panel-only part of `aff85fb`: reading older messages no longer forces the panel to the bottom, a return-to-bottom button resumes following, and resize changes refresh the scroll state. Existing gateway, session bindings and permission checks remain.
 
 ## Quick install
 

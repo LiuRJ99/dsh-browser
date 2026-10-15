@@ -168,4 +168,39 @@ describe('panel session transitions', () => {
       expect((panelApi.setActiveSession as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterInitialSession)
     })
   })
+  it('keeps the reading position on new activity and resumes following after the bottom control', async () => {
+    let event: Parameters<PanelApi['onEvent']>[0] | undefined
+    panelApi.onEvent = vi.fn(callback => { event = callback; return () => {} })
+    panelApi.setActiveSession = vi.fn().mockResolvedValue(undefined)
+    await act(async () => { root.render(createElement(App)) })
+    await act(async () => { onStatus?.('connected', null); onResumeHint?.(null) })
+    await vi.waitFor(() => { expect(panelApi.setActiveSession).toHaveBeenCalledWith('session-current', true) })
+    const messages = document.querySelector<HTMLElement>('.messages')!
+    Object.defineProperties(messages, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, writable: true, value: 100 },
+    })
+    await act(async () => { messages.dispatchEvent(new Event('scroll')) })
+    expect(document.querySelector('.scroll-to-bottom')).not.toBeNull()
+    const scroll = vi.mocked(HTMLElement.prototype.scrollTo)
+    scroll.mockClear()
+    await act(async () => {
+      event?.({ t: 'event', frame: { type: 'event', payload: {
+        sessionId: 'session-current', event: { type: 'turn/start', seq: 1 },
+      } } } as never)
+    })
+    expect(scroll).not.toHaveBeenCalled()
+    await act(async () => { document.querySelector<HTMLButtonElement>('.scroll-to-bottom')!.click() })
+    expect(scroll).toHaveBeenCalledWith({ top: 1000, behavior: 'smooth' })
+    expect(document.querySelector('.scroll-to-bottom')).toBeNull()
+    scroll.mockClear()
+    await act(async () => {
+      event?.({ t: 'event', frame: { type: 'event', payload: {
+        sessionId: 'session-current', event: { type: 'turn/end', seq: 2 },
+      } } } as never)
+    })
+    expect(scroll).toHaveBeenCalledWith({ top: 1000, behavior: 'instant' })
+  })
+
 })
