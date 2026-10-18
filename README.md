@@ -12,7 +12,7 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.14-dev.1 (bridge 0.0.14-dev.1)`. DSH compatibility is pinned to `0.2.0-rc.2`; `0.2.1-alpha.1` has not been tested. Older release/tag examples below are historical. For this validation round, use the [catalog's pinned commits and local validation guide](https://github.com/LiuRJ99/awesome-dsh-plugins/blob/main/docs/dsh-0.2.0-rc.2.zh-CN.md) rather than an older tag or an unqualified npm name.
+Current source version: `0.1.15-dev.1 (bridge 0.0.15-dev.1)`. Host compatibility: `0.2.0-rc.2 || 0.2.1-rc.1`. Install matching bridge and extension artifacts from this release.
 
 545 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
 

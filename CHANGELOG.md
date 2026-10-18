@@ -1,3 +1,7 @@
+## 0.1.15-dev.1 — 2026-10-18
+
+Pass the Connection-owned Peer through Gateway calls, streams and forwarded-event replies on DSH 0.2.1-rc.1. Retain token authentication, session tab isolation, capability gates and approvals. Make legacy invariant registration optional and align the standalone runtime and extension release metadata.
+
 # Changelog
 
 本仓库的变更记录。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，

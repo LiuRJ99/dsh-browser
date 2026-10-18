@@ -63,6 +63,10 @@ export interface GatewayFailure {
  * forwarded-event carrier and therefore uses `wireStream.open`.
  */
 export function createBrowserGateway(ctx: Context): BrowserGateway {
+  // BridgeServer authenticates the extension token before dispatch. Identity is
+  // supplied by Connection, never by an extension RPC payload. Older rc.2 Hosts
+  // lack browserPeer and ignore these additional arguments.
+  const peer = ctx.connection.browserPeer
   const sharedFetch = ctx.connection.createSharedFetchHandler('/api')
   const historyCursors = new Map<string, number>()
   const gateway: BrowserGateway = {
@@ -79,6 +83,7 @@ export function createBrowserGateway(ctx: Context): BrowserGateway {
 
       try {
         const value = await ctx.typertGateway.invoke({
+          peer,
           namespace: split.namespace,
           method: split.method,
           args,
@@ -91,11 +96,12 @@ export function createBrowserGateway(ctx: Context): BrowserGateway {
     },
     open: async (endpoint, args, signal) => {
       if (endpoint === '$events') {
-        return ctx.typertGateway.wireStream.open(endpoint, { args }, (async function* () {})(), undefined, signal)
+        return ctx.typertGateway.wireStream.open(endpoint, { args }, (async function* () {})(), peer, signal)
       }
       const split = splitEndpoint(endpoint)
       if (split === undefined) throw new Error(`invalid Remote endpoint ${JSON.stringify(endpoint)}`)
       return ctx.typertGateway.stream({
+        peer,
         namespace: split.namespace,
         method: split.method,
         args,
@@ -115,7 +121,7 @@ export function createBrowserGateway(ctx: Context): BrowserGateway {
             payload: { args: { clientId, eventId, outcome } },
           }),
           signal,
-        }))
+        }), peer)
         if (!response.ok) return failureResult('http', await response.text())
         const body = await response.json() as unknown
         const result = isRecord(body) ? body.result : undefined

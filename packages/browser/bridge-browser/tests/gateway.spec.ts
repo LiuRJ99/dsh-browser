@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { eventsFromRecords, historyFromFrame } from '../src/gateway.ts'
+import { describe, expect, it, vi } from 'vitest'
+import type { Context } from '@deepseek-ai/cordis'
+import { createBrowserGateway, eventsFromRecords, historyFromFrame } from '../src/gateway.ts'
 
 describe('eventsFromRecords', () => {
   it('unwraps real DSH wire records ({ type: "event", event })', () => {
@@ -162,5 +163,33 @@ describe('historyFromFrame', () => {
       hasMore: false,
       projections: { asOfSeq: 1, values: { title: 'Test Session' } },
     })
+  })
+})
+
+
+describe('Connection peer propagation', () => {
+  it('uses the Host-owned peer for calls, streams and event results', async () => {
+    const peer = { id: 'admitted-owner', principal: { kind: 'owner' } }
+    const invoke = vi.fn(async () => 'value')
+    const stream = vi.fn(async () => (async function* () {})())
+    const open = vi.fn(async () => (async function* () {})())
+    const fetch = vi.fn(async (request: Request, actualPeer: unknown) => {
+      expect(actualPeer).toBe(peer)
+      const body = await request.json() as { rpcId: string }
+      return Response.json({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: true } })
+    })
+    const gateway = createBrowserGateway({
+      connection: { browserPeer: peer, createSharedFetchHandler: () => ({ fetch }) },
+      typertGateway: { invoke, stream, wireStream: { open } },
+    } as unknown as Context)
+    const signal = new AbortController().signal
+    await gateway.request('settings/describe', {}, signal)
+    await gateway.open('session/follow', {}, signal)
+    await gateway.open('$events', {}, signal)
+    await gateway.respondEvent('client', 'event', { kind: 'next' }, signal)
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ peer, signal }))
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ peer, signal }))
+    expect(open.mock.calls[0]?.[3]).toBe(peer)
+    expect(fetch).toHaveBeenCalledOnce()
   })
 })

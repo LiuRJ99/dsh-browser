@@ -42,7 +42,7 @@ for (const [name, path] of providers) {
   const data = JSON.parse(readFileSync(path, 'utf8'))
   assert.equal(data.version, version, `${name}: runtime provider at ${path}`)
 }
-for (const name of ['dsh-session-query', 'dsh-session-projection-cache']) {
+for (const name of ['dsh-session-query-sqlite', 'dsh-session-projection-cache']) {
   const path = providers.get(`@deepseek-ai/${name}`)
   assert.ok(path, `${name}: missing runtime provider`)
   console.log(`${name}@${version}: ${path}`)
