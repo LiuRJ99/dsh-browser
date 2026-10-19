@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser",
-  "version": "0.1.15-dev.1",
+  "version": "0.1.15-dev.2",
   "description": "Standalone dsh browser bridge and controlled-tab Chrome/Firefox extension workspace",
   "author": "Yuxiang Lin",
   "license": "MIT",
@@ -19,5 +19,12 @@
     "@deepseek-ai/dsh-sandbox": "0.2.1-rc.1",
     "@deepseek-ai/dsh-scope": "0.2.1-rc.1",
     "@deepseek-ai/dsh-session-projection-cache": "0.2.1-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-client-locale": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-session-persistence": "0.2.1-rc.1"
   }
 }

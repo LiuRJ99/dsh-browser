@@ -12,7 +12,7 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.15-dev.1 (bridge 0.0.15-dev.1)`. Host compatibility: `0.2.0-rc.2 || 0.2.1-rc.1`. Install matching bridge and extension artifacts from this release.
+Current source version: `0.1.15-dev.2 (bridge 0.0.15-dev.2)`. Host compatibility: `>=0.2.0-rc.2`. Install matching bridge and extension artifacts from this release.
 
 545 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
 
@@ -238,3 +238,7 @@ Notes:
 - Click, type, file-upload, keypress, ordinary navigation, JavaScript execution, and reload calls use the same origin trust path. History navigation remains session-only because its destination is unknown; tab attach/follow use the target tab's origin trust. `browser_close_tab` always prompts. `browser_list_tabs` follows the page-sharing policy (`auto` silent, `ask` confirmed, `off` blocked). File uploads use the same destination-origin trust policy, while local paths remain redacted in approval summaries. Explicit cross-origin `browser_navigate` calls still require every known origin to be trusted, and unknown history destinations use the session grant.
 
 `browser_open_tab` accepts `active:false` to keep the visible tab in front while controlling the new background tab. Approval and session isolation still apply.
+
+## Host compatibility policy
+
+The minimum Host requirement is `>=0.2.0-rc.2`. Newer DSH versions remain eligible by default; narrow the range or adapt the implementation only when an incompatibility is confirmed. Do not maintain an allowlist of individual RCs. Fixed build SDK versions describe build inputs, not the allowed Host versions. Installation sources stay pinned to releases/tags. Qualification evidence is recorded separately: an eligible future Host is not automatically a tested Host.
