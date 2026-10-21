@@ -29,9 +29,13 @@ export interface BridgeSinks {
 /** Resolve whether opening a WebSocket is expected to succeed. */
 type BridgeProbe = (url: string) => Promise<boolean>
 
+/** Resolve a new auto-detected address after repeated connection probe failures. */
+type BridgeResolveUrl = (shouldContinue: () => boolean) => Promise<string | undefined>
+
 const BACKOFF_BASE_MS = 500
 const BACKOFF_MAX_MS = 10_000
 const HELLO_ACK_TIMEOUT_MS = 5_000
+const REDISCOVER_AFTER_FAILURES = 3
 
 /**
  * Owns one WebSocket connection generation and the reconnect loop.
@@ -51,6 +55,7 @@ export class BridgeClient {
     private readonly probe: BridgeProbe = async () => true,
     /** Whether a disconnected client still has an active user-owned lease. */
     private readonly shouldReconnect: () => boolean = () => true,
+    private readonly resolveUrl?: BridgeResolveUrl,
   ) {}
 
   /** Current coarse state (mirrors the last emitted sink value). */
@@ -109,17 +114,32 @@ export class BridgeClient {
   }
 
   private async loop(generation: number): Promise<void> {
+    let probeFailures = 0
     while (this.running && generation === this.generation) {
       if (!this.retryAllowed()) return
       const reachable = await this.probe(this.url).catch(() => false)
       if (!this.running || generation !== this.generation) return
       if (!this.retryAllowed()) return
       if (!reachable) {
+        probeFailures += 1
+        if (probeFailures >= REDISCOVER_AFTER_FAILURES && this.resolveUrl !== undefined) {
+          const current = (): boolean => this.running && generation === this.generation && this.shouldReconnect()
+          const next = await this.resolveUrl(current).catch(() => undefined)
+          probeFailures = 0
+          if (!this.running || generation !== this.generation) return
+          if (!this.retryAllowed()) return
+          if (next !== undefined && next !== this.url) {
+            this.url = next
+            this.attempt = 0
+            continue
+          }
+        }
         this.emitState('reconnecting')
         await this.waitBeforeRetry()
         continue
       }
 
+      probeFailures = 0
       const socket = new WebSocket(this.url)
       this.ws = socket
       // A replacement is an ownership handoff, not a transient transport

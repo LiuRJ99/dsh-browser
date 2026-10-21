@@ -93,7 +93,7 @@ pnpm --filter dsh-browser-extension run test
 
    两种命令都会从本机 `web` profile 加载同一个 bundle。默认端口为 3080；如被占用，可追加 `--port <port>`。
 
-   **DSH Desktop 用户**：桌面版默认让系统随机分配本地 Web 端口（`dsh-desktop.port: 0`），自动探测无法预知随机端口。请在桌面版设置中把端口固定为 `43189`（见 [deepseek-harness-desktop 用户指南](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/docs/user-guide.md)），扩展的自动探测会覆盖该端口；或直接在侧栏设置中手动填写 `http://127.0.0.1:<端口>`。
+   **官方 DSH Desktop 用户**：Desktop 使用 `--port 0` 启动 Web 服务，重启后实际桥端口可能变化。配套桥插件在稳定的回环发现端口 `43189` 发布当前地址。将桥地址留空并点击「保存并连接」；自动模式下探测连续失败后，会重新发现当前端口。手填地址保持固定，不会跟随端口变化。需要同时更新桥插件和扩展才能使用此行为。如果其他进程占用发现端口，请释放该端口，或手填当前实际桥地址。
 
    加载或重新加载扩展本身是被动的：只有打开侧栏后，扩展才会探测本机端口并创建 WebSocket。用户已建立的健康连接可在侧栏关闭后继续用于后台审批；但连接一旦掉线或被另一浏览器替换，没有打开侧栏时就不会重连。
 

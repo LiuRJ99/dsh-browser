@@ -82,6 +82,7 @@ async function bootComposition(): Promise<{ ctx: Context; port: number; root: st
     '  config:',
     `    token: '${TOKEN}'`,
     `    sessionWorkspacePath: '${join(root, 'browser-sessions')}'`,
+    '    discoveryPort: 0',
     '',
   ].join('\n'))
 

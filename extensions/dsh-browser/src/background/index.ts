@@ -116,8 +116,7 @@ const SETTINGS_DEFAULTS: Settings = {
 /**
  * 自动探测的候选端口：
  * - dsh web（CLI）默认 3080，端口被占时依次回退 3081 / 3090；
- * - DSH Desktop 默认由系统随机分配本地 Web 端口（`dsh-desktop.port: 0`），
- *   用户指南推荐固定为 43189（见 deepseek-harness-desktop docs/user-guide）；
+ * - 官方 DSH Desktop 使用 `--port 0`；桥插件在 43189 发布当前实际桥地址；
  * - 14389 为历史桌面应用端口，保留兼容旧版。
  */
 const DISCOVERY_PORTS = [3080, 3081, 3090, 14389, 43189]
@@ -1390,7 +1389,12 @@ async function startBridge(): Promise<void> {
         broadcastStatus()
         void pushBudgetToControlledTab(negotiated)
       },
-    }, probeBridge, () => panelPorts.size > 0)
+    }, probeBridge, () => panelPorts.size > 0, async (shouldContinue) => {
+      // A manually configured address stays pinned. Auto mode follows a Host
+      // restart by querying the stable discovery endpoint again (#107).
+      if (settings.bridgeUrl !== '') return undefined
+      return await discoverBridge(shouldContinue)
+    })
     bridge = client
     rpc = createRpc(client)
   }

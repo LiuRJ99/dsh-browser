@@ -260,7 +260,9 @@ export class BridgeServer {
     this.closed = true
     // Capture the live pump BEFORE replaceConnection nulls the connection.
     const pumps = this.current === null ? [] : [this.current.pump]
-    this.replaceConnection()
+    // Shutdown must remain reconnectable; 4000 is reserved for another
+    // browser taking ownership and makes the displaced extension stop.
+    this.replaceConnection(1001, 'server closing')
     for (const socket of this.wss.clients) socket.terminate()
     this.current = null
     await new Promise<void>((resolve, reject) => {
@@ -509,14 +511,14 @@ export class BridgeServer {
   }
 
   /** Close the current connection (if any) and settle its in-flight calls. */
-  private replaceConnection(): void {
+  private replaceConnection(code = 4000, reason = 'replaced'): void {
     const conn = this.current
     if (conn === null) return
     this.current = null
     clearInterval(conn.ping)
     conn.abort.abort()
     if (conn.ws.readyState === WebSocket.OPEN || conn.ws.readyState === WebSocket.CONNECTING) {
-      conn.ws.close(4000, 'replaced')
+      conn.ws.close(code, reason)
     }
     for (const [id, pending] of this.pendingTools) {
       clearTimeout(pending.timer)

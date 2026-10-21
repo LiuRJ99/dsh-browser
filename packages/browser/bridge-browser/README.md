@@ -16,8 +16,15 @@ The **browser-operation bridge** for dsh: mounts a token-authenticated WebSocket
 | `maxInteractiveItems` | `number` | 60 | Upper bound on interactive inventory items per snapshot. |
 | `sessionWorkspacePath` | `string` | `~/.dsh/browser-sessions` | Dedicated Host Workspace for extension-created sessions. The plugin creates and idempotently registers the directory on the first implicit `session.create`; the session cwd becomes this path, so the GUI shows a `browser-sessions` workspace group. Set `""` to keep sessions Ungrouped. |
 | `deferSessionCreate` | `boolean` | `true` | Sessions materialize only on the first message: `session.create` answers with a provisional id (nothing persisted), history reads empty, and the first `session.prompt` creates the real session (same id, original payload). Opening the panel without chatting leaves zero trace in the session store/GUI. |
+| `discoveryPort` | `number` | 43189 | Stable loopback port publishing the current bridge address for Desktop hosts using `--port 0`. `0` disables the extra listener. |
 
 Workspace grouping is best-effort. If the composition has no workspace domain, directory creation fails, or `workspace.create` rejects the path, the plugin logs one warning and sends every session creation without an injected workspace so browser chat remains usable.
+
+### Desktop port discovery
+
+Official DSH Desktop starts its Web server with `--port 0`, so its bridge port may change after a restart. The bridge publishes the live WebSocket address at `http://127.0.0.1:43189/ext/bridge-config`. Leave the extension's bridge address empty and save to enable auto-discovery; after repeated connection failures it discovers the current address again. Manual addresses remain pinned.
+
+The discovery listener only serves `GET`/`HEAD /ext/bridge-config`, returns no token, and closes when the plugin unloads. WebSocket authentication and browser approvals still apply. If another process occupies `discoveryPort`, startup continues with a warning; use a manual bridge address or free that port. The listener does not provide multi-Host selection.
 
 ## Usage
 

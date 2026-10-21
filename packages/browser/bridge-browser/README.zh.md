@@ -16,9 +16,16 @@ dsh 的**浏览器操作桥**：在宿主 webserver 上挂载一个 **token 认�
 | `maxInteractiveItems` | `number` | 60 | 单次快照交互清单条数上限。 |
 | `sessionWorkspacePath` | `string` | `~/.dsh/browser-sessions` | 扩展创建的会话所用的专用 Host Workspace。插件会在首次调用未显式指定工作区的 `session.create` 时创建并幂等注册该目录；会话的 cwd 随之变为此路径，因此 GUI 会显示 `browser-sessions` 工作区分组。设为 `""` 可让会话继续显示在“未分组”中。 |
 | `deferSessionCreate` | `boolean` | `true` | 会话只在第一条消息时才真正创建：`session.create` 先返回一个内存暂定 ID（不落库），历史读取为空，第一次 `session.prompt` 才创建真实会话（同一 ID、回放原始创建参数）。只打开面板不说话，会在会话库/GUI 里不留任何痕迹。 |
+| `discoveryPort` | `number` | 43189 | 在稳定的回环端口发布当前桥地址，供使用 `--port 0` 的 Desktop 自动发现。`0` 关闭额外监听器。 |
 | `screenshotDir` | `string` | `~/.dsh/browser-screenshots` | `browser_screenshot` 截图落盘目录。 |
 
 工作区分组采用尽力而为方式。如果组合没有 workspace 域、目录创建失败，或 `workspace.create` 拒绝该路径，插件会记录一条警告，并在不注入工作区的情况下发送所有会话创建请求，因此浏览器聊天仍可使用。
+
+### Desktop 端口发现
+
+官方 DSH Desktop 使用 `--port 0` 启动 Web 服务，重启后桥端口可能变化。桥插件在 `http://127.0.0.1:43189/ext/bridge-config` 发布实际的 WebSocket 地址。将扩展的桥地址留空并保存即可启用自动发现；连接连续失败后，扩展会重新发现当前地址。手填地址仍保持固定。
+
+发现监听器只提供 `GET`/`HEAD /ext/bridge-config`，不返回 token，并随插件卸载关闭。WebSocket 认证和浏览器审批仍然生效。如果其他进程占用 `discoveryPort`，插件会告警并继续启动；可手填实际桥地址，或释放该端口。发现监听器不提供多个 Host 的选择界面。
 
 ## 使用
 

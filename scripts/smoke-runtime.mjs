@@ -66,6 +66,7 @@ async function start(reopen) {
     `    token: ${JSON.stringify(token)}`,
     '    sessionWorkspacePath: ""',
     '    deferSessionCreate: false',
+    '    discoveryPort: 0',
     '- insert:',
     '    - id: runtime-smoke-probe',
     `      name: ${JSON.stringify(pathToFileURL(join(root, 'scripts/fixtures/runtime-probe.mjs')).href)}`,

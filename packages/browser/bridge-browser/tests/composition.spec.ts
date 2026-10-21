@@ -15,6 +15,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createServer } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -45,7 +46,7 @@ afterEach(async () => {
 })
 
 /** Write a dist fixture and the composition cordis.yml, then boot it through the real Loader. */
-async function loadComposition(): Promise<{ ctx: Context; configPath: string; port: number }> {
+async function loadComposition(discoveryPort = 0): Promise<{ ctx: Context; configPath: string; port: number }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-bridge-browser-'))
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
@@ -69,6 +70,7 @@ async function loadComposition(): Promise<{ ctx: Context; configPath: string; po
     // deferred-creation behavior is covered by the extension e2e instead.
     '    deferSessionCreate: false',
     "    sessionWorkspacePath: ''",
+    `    discoveryPort: ${discoveryPort}`,
     '',
   ].join('\n'))
 
@@ -135,6 +137,41 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 }
 
 describe('real Loader composition', () => {
+  it('discovers the live bridge, serves RPCs, and releases discovery on Host disposal', { timeout: 60_000 }, async () => {
+    const reservation = createServer()
+    await new Promise<void>((resolve) => { reservation.listen(0, '127.0.0.1', resolve) })
+    const address = reservation.address()
+    if (address === null || typeof address === 'string') throw new Error('expected TCP')
+    const discoveryPort = address.port
+    await new Promise<void>((resolve) => { reservation.close(() => { resolve() }) })
+
+    const { ctx, port } = await loadComposition(discoveryPort)
+    const discoveryUrl = `http://127.0.0.1:${discoveryPort}/ext/bridge-config`
+    await expect.poll(async () => {
+      try { return (await fetch(discoveryUrl)).status } catch { return 0 }
+    }).toBe(200)
+    const config = await (await fetch(discoveryUrl)).json() as { wsUrl: string }
+    expect(config.wsUrl).toBe(`ws://127.0.0.1:${port}/ext/bridge`)
+    const client = await connect(Number(new URL(config.wsUrl).port))
+    send(client.ws, { t: 'hello', token: '', caps: { textOnly: true, snapshotMaxChars: 32000, maxInteractiveItems: 60 } })
+    await waitFor(() => client.frames.some((frame) => frame.t === 'hello.ok'))
+    send(client.ws, { t: 'rpc', id: 'discovered-list', method: 'session.list', payload: {} })
+    await waitFor(() => client.frames.some((frame) => frame.t === 'rpc.result' && frame.id === 'discovered-list'))
+    expect(client.frames.find((frame) => frame.t === 'rpc.result' && frame.id === 'discovered-list'))
+      .toMatchObject({ ok: true, result: { result: { ok: true } } })
+    client.ws.close()
+    await client.closed
+    await ctx.fiber.dispose()
+    await expect(fetch(discoveryUrl)).rejects.toThrow()
+
+    const replacement = createServer()
+    await new Promise<void>((resolve, reject) => {
+      replacement.once('error', reject)
+      replacement.listen(discoveryPort, '127.0.0.1', resolve)
+    })
+    await new Promise<void>((resolve) => { replacement.close(() => { resolve() }) })
+  })
+
   it('does not eagerly follow every persisted session when the extension connects', { timeout: 60_000 }, async () => {
     const { ctx, port } = await loadComposition()
     const invocations = ctx.get('targetGatewayInvocations') as string[]
