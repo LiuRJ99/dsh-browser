@@ -93,7 +93,7 @@ The recommended zero-configuration command does not require Git or a local clone
 
    Both commands load the same bundle from the local `web` profile. Port 3080 is used by default; append `--port <port>` when it is occupied.
 
-   **DSH Desktop users**: the Desktop app assigns a random local Web port by default (`dsh-desktop.port: 0`), so port-based auto-discovery cannot predict it. Pin the port to `43189` in Desktop settings (see the [deepseek-harness-desktop user guide](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/docs/user-guide.en.md)); auto-discovery covers that port. Alternatively, enter `http://127.0.0.1:<port>` manually in the side-panel settings.
+   **Official DSH Desktop users**: Desktop starts its Web server with `--port 0`, so its actual bridge port may change after a restart. The matching bridge plugin publishes the current address on the stable loopback discovery port `43189`. Leave the bridge address empty and click **Save and connect**; after repeated probe failures, auto mode discovers the current port again. A manually entered address remains pinned and will not follow port changes. Update both the bridge plugin and extension to use this behavior. If another process occupies the discovery port, release that port or enter the current bridge address manually.
 
    Loading or reloading the extension is passive: it does not probe local ports or open a WebSocket until the side panel is opened. A healthy connection established by the user may remain available for background approvals after the panel closes, but it will not reconnect without an open panel if it drops or another browser replaces it.
 

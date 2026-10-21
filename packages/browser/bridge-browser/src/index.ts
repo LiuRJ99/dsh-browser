@@ -47,6 +47,7 @@ import { withSessionDeferral } from './session-deferral.ts'
 import { withSessionWorkspace } from './session-workspace.ts'
 import { purgeSessionFiles, type SessionPurgeDeps } from './session-purge.ts'
 import { resolveToken } from './token.ts'
+import { DEFAULT_DISCOVERY_PORT, startDiscoveryListener } from './discovery.ts'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'bridge-browser'
@@ -85,6 +86,8 @@ export interface Config {
   deferSessionCreate?: boolean
   /** Directory where `browser_screenshot` writes captured images. Defaults under the dsh home. */
   screenshotDir?: string
+  /** Stable loopback discovery port for Desktop's dynamic Web port. Defaults to 43189; 0 disables it. */
+  discoveryPort?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -95,6 +98,7 @@ export const Config: z<Config> = z.object({
   sessionWorkspacePath: z.string().default(DEFAULT_SESSION_WORKSPACE_PATH),
   deferSessionCreate: z.boolean().default(DEFAULT_DEFER_SESSION_CREATE),
   screenshotDir: z.string().default(dshHomePath('browser-screenshots')),
+  discoveryPort: z.natural().max(65535).default(DEFAULT_DISCOVERY_PORT),
 })
 
 /** The shape after schemastery applies its defaults to every field. */
@@ -121,6 +125,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     sessionWorkspacePath: config.sessionWorkspacePath ?? DEFAULT_SESSION_WORKSPACE_PATH,
     deferSessionCreate: config.deferSessionCreate ?? DEFAULT_DEFER_SESSION_CREATE,
     screenshotDir: config.screenshotDir ?? dshHomePath('browser-screenshots'),
+    discoveryPort: config.discoveryPort ?? DEFAULT_DISCOVERY_PORT,
   }
   assertPositiveInteger('toolTimeoutMs', resolved.toolTimeoutMs)
   assertPositiveInteger('snapshotMaxChars', resolved.snapshotMaxChars)
@@ -128,6 +133,9 @@ export function resolveConfig(config: Config): ResolvedConfig {
     throw new Error(`bridge-browser: snapshotMaxChars must be at least ${MIN_SNAPSHOT_MAX_CHARS}`)
   }
   assertPositiveInteger('maxInteractiveItems', resolved.maxInteractiveItems)
+  if (!Number.isInteger(resolved.discoveryPort) || resolved.discoveryPort < 0 || resolved.discoveryPort > 65535) {
+    throw new Error('bridge-browser: discoveryPort must be an integer between 0 and 65535')
+  }
   return resolved
 }
 
@@ -322,6 +330,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     },
   }
   ctx.effect(() => ctx.webServer.register(configRoute), 'bridge-browser: /ext/bridge-config route')
+
+  if (resolved.discoveryPort > 0) {
+    ctx.effect(() => {
+      const listening = startDiscoveryListener({
+        port: resolved.discoveryPort,
+        webPort: () => ctx.webServer.port,
+        warn: (message) => { ctx.logger.warn(message) },
+      })
+      // Wait for an in-flight bind before disposal so HMR cannot leak a listener
+      // or leave its fixed port occupied when the replacement plugin starts.
+      return async () => {
+        const listener = await listening
+        if (listener !== undefined) {
+          await new Promise<void>((resolve) => { listener.close(() => { resolve() }) })
+        }
+      }
+    }, 'bridge-browser: discovery listener')
+  }
 
   // Local Node automation reuses the existing extension bridge connection;
   // it never opens a second WebSocket client that could evict the extension.

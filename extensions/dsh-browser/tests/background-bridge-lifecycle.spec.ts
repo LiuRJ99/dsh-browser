@@ -55,6 +55,7 @@ function panelPort() {
 
 function mockChrome(options: {
   localSet?: (items: Record<string, unknown>) => Promise<void>
+  settings?: Record<string, unknown>
 } = {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
   const onAlarm = chromeEvent<[chrome.alarms.Alarm]>()
@@ -82,7 +83,7 @@ function mockChrome(options: {
     },
     storage: {
       local: {
-        get: vi.fn(async () => ({})),
+        get: vi.fn(async () => ({ dshSettings: options.settings ?? {} })),
         set: vi.fn(options.localSet ?? (async () => {})),
       },
       session: {
@@ -113,12 +114,58 @@ function mockChrome(options: {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.resetModules()
   vi.unstubAllGlobals()
   FakeWebSocket.instances = []
 })
 
 describe('background bridge lifecycle', () => {
+  it('follows Desktop port changes through the stable discovery endpoint', async () => {
+    vi.useFakeTimers()
+    const chromeMock = mockChrome()
+    let webPort = 49966
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => {
+      const port = Number(new URL(String(input)).port)
+      return port === 43189 || port === webPort
+        ? new Response(JSON.stringify({ wsUrl: `ws://127.0.0.1:${webPort}/ext/bridge` }))
+        : new Response(null, { status: 503 })
+    }))
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    await import('../src/background/index.ts')
+    const panel = panelPort()
+    chromeMock.onConnect.emit(panel.port)
+    await vi.advanceTimersByTimeAsync(0)
+    const original = FakeWebSocket.instances[0]!
+    expect(original.url).toBe('ws://127.0.0.1:49966/ext/bridge')
+    original.open()
+    await vi.advanceTimersByTimeAsync(0)
+    original.receive({ t: 'hello.ok', caps: { textOnly: true, snapshotMaxChars: 32000, maxInteractiveItems: 60 } })
+    await vi.advanceTimersByTimeAsync(0)
+
+    webPort = 61967
+    original.close()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(FakeWebSocket.instances[1]!.url).toBe('ws://127.0.0.1:61967/ext/bridge')
+    panel.onDisconnect.emit()
+  })
+
+  it('keeps a manual address pinned instead of switching it to another Host', async () => {
+    vi.useFakeTimers()
+    const chromeMock = mockChrome({ settings: { bridgeUrl: 'ws://127.0.0.1:49966/ext/bridge' } })
+    const fetchMock = vi.fn(async (_input: string | URL) => new Response(null, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    await import('../src/background/index.ts')
+    const panel = panelPort()
+    chromeMock.onConnect.emit(panel.port)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(3)
+    expect(fetchMock.mock.calls.every(([input]) => String(input).startsWith('http://127.0.0.1:49966/'))).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    panel.onDisconnect.emit()
+  })
+
   it('does not probe, connect, or arm keepalive just because the extension loads', async () => {
     const chromeMock = mockChrome()
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({

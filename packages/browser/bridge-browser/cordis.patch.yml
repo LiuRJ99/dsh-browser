@@ -14,6 +14,9 @@
 # Sessions materialize only on the first message (deferSessionCreate defaults
 # to true): opening the side panel without chatting leaves no session behind.
 #
+# The bridge publishes Desktop's actual WebSocket URL on loopback port 43189.
+# Set discoveryPort to 0 to disable this additional read-only discovery listener.
+#
 # Security: the bridge path carries its own token auth and refuses privileged
 # gateway methods (settings/credentials/open-*) for non-loopback remotes. Do
 # not run `dsh web --host 0.0.0.0` on untrusted networks with this layer.

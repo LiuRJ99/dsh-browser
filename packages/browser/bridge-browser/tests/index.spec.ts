@@ -59,6 +59,7 @@ describe('config', () => {
       sessionWorkspacePath: dshHomePath('browser-sessions'),
       deferSessionCreate: true,
       screenshotDir: dshHomePath('browser-screenshots'),
+      discoveryPort: 43189,
     })
     expect(new Config().sessionWorkspacePath).toBe(dshHomePath('browser-sessions'))
   })
@@ -71,6 +72,7 @@ describe('config', () => {
       maxInteractiveItems: 3,
       sessionWorkspacePath: '',
       deferSessionCreate: false,
+      discoveryPort: 0,
     })).toEqual({
       token: 'fixed',
       toolTimeoutMs: 1,
@@ -79,21 +81,31 @@ describe('config', () => {
       sessionWorkspacePath: '',
       deferSessionCreate: false,
       screenshotDir: dshHomePath('browser-screenshots'),
+      discoveryPort: 0,
     })
     expect(new Config({ sessionWorkspacePath: '' }).sessionWorkspacePath).toBe('')
+  })
+
+  it('validates discovery ports and allows disabling the listener', () => {
+    expect(new Config().discoveryPort).toBe(43189)
+    expect(resolveConfig({ discoveryPort: 0 }).discoveryPort).toBe(0)
+    for (const discoveryPort of [-1, 1.5, 65536, NaN]) {
+      expect(() => resolveConfig({ discoveryPort })).toThrow(/discoveryPort/)
+      expect(() => new Config({ discoveryPort })).toThrow()
+    }
   })
 })
 
 describe('apply', () => {
   it('registers the bridge with a fixed token (no generation)', async () => {
-    await apply(stubContext(), { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })
+    await apply(stubContext(), { token: 'fixed-token', ...VALID, sessionWorkspacePath: '', discoveryPort: 0 })
   })
 
   it('generates and persists a token when none is configured', async () => {
     const home = await mkdtemp(join(tmpdir(), 'dsh-bridge-home-'))
     dirs.push(home)
     vi.stubEnv('DSH_HOME', home)
-    await apply(stubContext(), VALID)
+    await apply(stubContext(), { ...VALID, discoveryPort: 0 })
   })
 
   it('rejects invalid budgets loudly', async () => {
