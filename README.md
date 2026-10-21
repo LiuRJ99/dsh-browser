@@ -12,7 +12,7 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.15-dev.2 (bridge 0.0.15-dev.2)`. Host compatibility: `>=0.2.0-rc.2`. Install matching bridge and extension artifacts from this release.
+Current source version: `0.1.16-dev.1 (bridge 0.0.16-dev.1)`. Host compatibility: `>=0.2.0-rc.2`. Install matching bridge and extension artifacts from this release.
 
 545 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
 
