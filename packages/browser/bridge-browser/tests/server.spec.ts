@@ -509,6 +509,7 @@ describe('BridgeServer', () => {
     const h = await startBridge()
     harnesses.push(h)
     const first = await connect(h.url)
+    const displaced = new Promise<number>((resolve) => { first.ws.once('close', (code) => { resolve(code) }) })
     send(first.ws, { t: 'hello', token: TOKEN, caps: { textOnly: true, snapshotMaxChars: 12000, maxInteractiveItems: 60 } })
     await waitFor(() => first.frames.some((f) => f.t === 'hello.ok'))
     const pending = h.bridge.requestTool('browser_click', {}, new AbortController().signal)
@@ -521,6 +522,7 @@ describe('BridgeServer', () => {
     await waitFor(() => second.frames.some((f) => f.t === 'hello.ok'))
 
     await pendingAssertion
+    expect(await displaced).toBe(4000)
     first.ws.close()
     second.ws.close()
   })
@@ -593,6 +595,19 @@ describe('BridgeServer', () => {
     harnesses.push(h)
     await h.bridge.close()
     await h.bridge.close()
+  })
+
+  it('uses a reconnectable close code when the Host shuts down', async () => {
+    const h = await startBridge()
+    harnesses.push(h)
+    const { ws, frames } = await connect(h.url)
+    send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
+    await waitFor(() => frames.some((frame) => frame.t === 'hello.ok'))
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      ws.once('close', (code, reason) => { resolve({ code, reason: reason.toString() }) })
+    })
+    await h.bridge.close()
+    expect(await closed).toEqual({ code: 1001, reason: 'server closing' })
   })
 
   it('sends protocol pings on the configured cadence and the client answers pong', async () => {

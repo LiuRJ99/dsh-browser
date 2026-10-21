@@ -63,7 +63,7 @@ describe('BridgeClient connection probe', () => {
     expect(states.at(-1)).toBe('connected')
 
     webPort = 61967
-    original.close()
+    original.close(1001, 'server closing')
     await vi.advanceTimersByTimeAsync(10_000)
     expect(resolveUrl).toHaveBeenCalledOnce()
     const replacement = FakeWebSocket.instances[1]!
