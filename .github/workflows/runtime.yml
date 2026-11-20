@@ -26,4 +26,9 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run test
       - run: pnpm run build
-      - run: pnpm run test:smoke
+      - name: Install the complete official npm Host
+        run: |
+          DSH_VERSION=$(node -p "require('./package.json').dependencies['@deepseek-ai/dsh']")
+          npm install --prefix "$RUNNER_TEMP/dsh-host" --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+      - name: Smoke test the official npm Host
+        run: DSH_TEST_CLI="$RUNNER_TEMP/dsh-host/node_modules/@deepseek-ai/dsh/lib/bin.js" pnpm run test:smoke
