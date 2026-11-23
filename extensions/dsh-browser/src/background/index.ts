@@ -41,6 +41,7 @@ import {
 import type { ServerFrame } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import { BRIDGE_CONFIG_PATH, BRIDGE_PATH } from '@yuxianglin/dsh-bridge-browser/src/protocol.ts'
 import { bindOpenedTabAffinity } from './open-tab-binding.ts'
+import { SessionTabGroups } from './session-tab-groups.ts'
 import { BridgeClient, type BridgeState } from './bridge.ts'
 import { createRpc } from './rpc.ts'
 import {
@@ -80,6 +81,7 @@ import {
   RECENT_SESSION_STORAGE_KEY,
   RecentSessionTracker,
   sessionIdFromFrame,
+  sessionTitleFromFrame,
 } from './session-continuity.ts'
 
 const TRUSTED_ORIGINS_VERSION = 1 as const
@@ -177,6 +179,16 @@ let bridgeStartRevision = 0
 const interactionResponses = new InteractionResponseRouter()
 const transientEvents = new TransientEventCache()
 const tabAffinity = new TabAffinityController()
+const sessionTabGroups = new SessionTabGroups({
+  resolveTitle: lookUpSessionTitle,
+  resolveGroup: async (sessionId) => {
+    const tab = tabAffinity.getSessionTab(sessionId)
+    if (tab?.tabId === undefined) return undefined
+    const live = await chrome.tabs.get(tab.tabId).catch(() => undefined)
+    return live !== undefined && live.groupId >= 0 ? live.groupId : undefined
+  },
+})
+const pendingDedicatedTabs = new Map<string, Promise<AffinityTab | null>>()
 const focusedWindow = new FocusedWindowTracker()
 const selections = new SelectionTracker()
 const recentSession = new RecentSessionTracker({
@@ -747,29 +759,44 @@ void Promise.all([settingsReady, affinityReady]).then(() => {
 }).catch(() => {})
 
 /** Open a dedicated tab for one session and bind it. */
-async function createDedicatedTabForSession(
-  sessionId: string,
-  options: { url?: string; active?: boolean; focus?: boolean } = {},
-): Promise<AffinityTab | null> {
+async function createDedicatedTabForSession(sessionId: string, groupSessionId = sessionId, focus = false): Promise<AffinityTab | null> {
   const sid = sessionId.trim()
   if (sid === '') return null
-  const url = options.url ?? 'about:blank'
-  const active = options.active ?? false
-  const focus = options.focus ?? active
+  let pending = pendingDedicatedTabs.get(sid)
+  if (pending === undefined) {
+    pending = openDedicatedTab(sid, groupSessionId, focus).finally(() => pendingDedicatedTabs.delete(sid))
+    pendingDedicatedTabs.set(sid, pending)
+  }
+  const tab = await pending
+  if (focus && tab !== null && tabAffinity.focusSession(sid)) {
+    persistTabAffinity()
+    broadcastTabAffinity()
+  }
+  return tab
+}
+
+async function openDedicatedTab(sessionId: string, groupSessionId: string, focus: boolean): Promise<AffinityTab | null> {
   try {
-    let tab: chrome.tabs.Tab | undefined
-    if (typeof chrome?.tabs?.create === 'function') {
-      tab = await chrome.tabs.create({ url, active })
-    } else {
-      tab = await syncActiveTab()
-    }
-    if (tab === undefined) return null
+    if (typeof chrome.tabs.create !== 'function') return null
+    const existing = tabAffinity.getSessionTab(sessionId)
+    if (existing !== undefined) return existing
+    const active = focus && !sessionTabGroups.available
+    const tab = await sessionTabGroups.createTab(groupSessionId, { url: 'about:blank', active })
     const summary = summarizeTab(tab)
     if (summary === null) return null
-    if (focus) {
-      tabAffinity.bindNewSession(sid, summary)
+    // An explicit attach or open may have bound the session while Chrome created this placeholder.
+    const current = tabAffinity.getSessionTab(sessionId)
+    if (current !== undefined) {
+      await chrome.tabs.remove(summary.tabId).catch(() => {})
+      return current
+    }
+    const focusedSession = tabAffinity.focusedSession()
+    if (active) {
+      tabAffinity.bindNewSession(sessionId, summary)
+    } else if (sessionTabGroups.available && (focus || focusedSession === null || focusedSession === sessionId)) {
+      tabAffinity.rebindControlled(summary, sessionId)
     } else {
-      tabAffinity.bindSession(sid, summary)
+      tabAffinity.bindSession(sessionId, summary)
     }
     resetTabSnapshot(summary.tabId)
     persistTabAffinity()
@@ -781,13 +808,13 @@ async function createDedicatedTabForSession(
 }
 
 /** Bind at prompt submission so a switch while the model is thinking is visible. */
-async function ensureInitialTabBinding(sessionId?: string): Promise<boolean> {
+async function ensureInitialTabBinding(sessionId?: string, groupSessionId = sessionId): Promise<boolean> {
   await affinityReady
   if (tabAffinity.resolveTarget(sessionId).kind !== 'initial') return true
   try {
     if (sessionId !== undefined && sessionId.trim() !== '') {
-      const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
-      if (dedicated !== null) return true
+      const dedicated = await createDedicatedTabForSession(sessionId, groupSessionId)
+      if (dedicated !== null || sessionTabGroups.available) return dedicated !== null
     }
     const tab = await syncActiveTab()
     const summary = tab === undefined ? null : summarizeTab(tab)
@@ -819,7 +846,7 @@ function affinityFailure(kind: 'handoff' | 'lost' | 'missing'): ToolAnswer {
 }
 
 /** Resolve one stable tab target without allowing a manual switch to drift it. */
-async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'windowId'> | ToolAnswer> {
+async function resolveToolTab(sessionId?: string, groupSessionId = sessionId): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'windowId'> | ToolAnswer> {
   await affinityReady
   // Do not let the global auto-follow setting override an explicit
   // `keep-always` pin. The pinned binding remains the sole target until the
@@ -846,13 +873,13 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
     if (resolution.kind === 'handoff') return affinityFailure('handoff')
     if (resolution.kind === 'lost') {
       if (sessionId !== undefined && sessionId.trim() !== '') {
-        const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+        const dedicated = await createDedicatedTabForSession(sessionId, groupSessionId)
         if (dedicated !== null) continue
       }
       return affinityFailure('lost')
     }
     if (resolution.kind === 'initial') {
-      if (!await ensureInitialTabBinding(sessionId)) return affinityFailure('missing')
+      if (!await ensureInitialTabBinding(sessionId, groupSessionId)) return affinityFailure('missing')
       continue
     }
     try {
@@ -864,7 +891,7 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
       if (current.kind === 'handoff') return affinityFailure('handoff')
       if (current.kind === 'lost') {
         if (sessionId !== undefined && sessionId.trim() !== '') {
-          const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+          const dedicated = await createDedicatedTabForSession(sessionId, groupSessionId)
           if (dedicated !== null) continue
         }
         return affinityFailure('lost')
@@ -882,7 +909,7 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
         broadcastTabAffinity()
       }
       if (sessionId !== undefined && sessionId.trim() !== '') {
-        const dedicated = await createDedicatedTabForSession(sessionId, { url: 'about:blank', active: false })
+        const dedicated = await createDedicatedTabForSession(sessionId, groupSessionId)
         if (dedicated !== null) continue
       }
       return affinityFailure('lost')
@@ -892,10 +919,12 @@ async function resolveToolTab(sessionId?: string): Promise<Pick<chrome.tabs.Tab,
 }
 
 /** Pick a window for browser_open_tab without changing the current session target. */
-async function resolveOpenTabWindow(sessionId?: string): Promise<{ windowId: number } | ToolAnswer> {
+async function resolveOpenTabWindow(sessionId?: string, groupSessionId = sessionId): Promise<{ windowId: number } | ToolAnswer> {
   await affinityReady
   const resolution = tabAffinity.resolveTarget(sessionId)
   if (resolution.kind === 'handoff') return affinityFailure('handoff')
+  const group = await sessionTabGroups.get(groupSessionId)
+  if (group !== undefined) return { windowId: group.windowId }
   if (resolution.kind === 'target') {
     try {
       const tab = await chrome.tabs.get(resolution.tab.tabId)
@@ -918,7 +947,11 @@ async function resolveOpenTabWindow(sessionId?: string): Promise<{ windowId: num
 function removeOrphanBlankTab(previous: AffinityTab | undefined, replacementTabId: number): void {
   if (previous === undefined || previous.tabId === replacementTabId || previous.url !== 'about:blank') return
   if (tabAffinity.sessionIdsForTab(previous.tabId).length !== 0) return
-  if (typeof chrome?.tabs?.remove === 'function') chrome.tabs.remove(previous.tabId).catch(() => {})
+  void chrome.tabs.get(previous.tabId).then((tab) => {
+    if (tab.url === 'about:blank' && !tab.pendingUrl && tabAffinity.sessionIdsForTab(previous.tabId).length === 0) {
+      return chrome.tabs.remove(previous.tabId)
+    }
+  }).catch(() => {})
 }
 
 /** Attach one model-selected tab to the calling session without activating it. */
@@ -1165,12 +1198,7 @@ async function handleAttachTabCall(
     const sid = effectiveSessionId ?? 'default'
     commitAction?.()
     const previous = tabAffinity.attachSessionTab(sid, summarizeTab(currentTab) ?? summary)
-    if (previous !== undefined && previous.tabId !== tabId && previous.url === 'about:blank') {
-      const otherSessions = tabAffinity.sessionIdsForTab(previous.tabId)
-      if (otherSessions.length === 0 && typeof chrome?.tabs?.remove === 'function') {
-        chrome.tabs.remove(previous.tabId).catch(() => {})
-      }
-    }
+    removeOrphanBlankTab(previous, tabId)
     resetTabSnapshot(tabId)
     persistTabAffinity()
     broadcastTabAffinity()
@@ -1189,6 +1217,8 @@ async function handleAttachTabCall(
 function routeToolCall(call: ToolCall): void {
   if (bridge === null) return
   recentSession.remember(call.sessionId)
+  const groupSessionId = call.groupSessionId ?? call.sessionId
+  if (call.groupTitle !== undefined) void sessionTabGroups.rememberTitle(groupSessionId, call.groupTitle)
   activeToolCalls.get(call.id)?.abort()
   const controller = new AbortController()
   activeToolCalls.set(call.id, controller)
@@ -1243,9 +1273,11 @@ function routeToolCall(call: ToolCall): void {
     const controlledTabId = call.sessionId === undefined
       ? affinity.controlled?.tabId
       : tabAffinity.getSessionTab(call.sessionId)?.tabId
+    const group = call.name === 'browser_list_tabs' ? await sessionTabGroups.get(groupSessionId) : undefined
     const context: TabManagementContext = {
       unrestrictedAccess: false,
       ...(controlledTabId === undefined ? {} : { controlledTabId }),
+      ...(group === undefined ? {} : { sessionGroupId: group.id }),
       followTab: (tab) => followSelectedTab(tab, call.sessionId),
       commitAction,
     }
@@ -1296,22 +1328,25 @@ function routeToolCall(call: ToolCall): void {
     return
   }
   if (call.name === 'browser_open_tab') {
-    sendResult(resolveOpenTabWindow(call.sessionId).then((target) => 'ok' in target
+    const openCall = sessionTabGroups.available && call.sessionId?.trim() && call.args.active === undefined
+      ? { ...call, args: { ...call.args, active: false } }
+      : call
+    sendResult(resolveOpenTabWindow(call.sessionId, groupSessionId).then((target) => 'ok' in target
       ? target
       : dispatchOpenTab(
-          call,
-          target.windowId,
+          openCall,
+          (active) => sessionTabGroups.createTab(groupSessionId, { url: 'about:blank', active, windowId: target.windowId }),
           settings.sharePageContent,
           budget,
           (prompt) => authorizeToolCall(prompt, controller.signal, target.windowId, call.sessionId),
           controller.signal,
-          (tab) => bindOpenedTab(tab, call.sessionId, { active: call.args.active !== false }),
+          (tab) => bindOpenedTab(tab, call.sessionId, { active: openCall.args.active !== false }),
           (tabId) => tabAffinity.allowsTarget(tabId, call.sessionId),
           commitAction,
         )))
     return
   }
-  sendResult(resolveToolTab(call.sessionId).then((target) => 'ok' in target
+  sendResult(resolveToolTab(call.sessionId, groupSessionId).then((target) => 'ok' in target
     ? target
     : dispatchToolCall(
         call,
@@ -1376,6 +1411,8 @@ async function startBridge(): Promise<void> {
       onFrame: (frame) => {
         if (frame.t === 'event') {
           recentSession.noteActivity(sessionIdFromFrame(frame))
+          const titled = sessionTitleFromFrame(frame)
+          if (titled !== undefined) void sessionTabGroups.rememberTitle(titled.sessionId, titled.title)
           transientEvents.ingest(frame)
           broadcastEvent(frame)
         }
@@ -1399,6 +1436,65 @@ async function startBridge(): Promise<void> {
     rpc = createRpc(client)
   }
   bridge.start(url, settings.token)
+}
+
+/**
+ * Read one session's durable title from the Host. The group falls back to the
+ * short session id when neither the projection nor the history has a title.
+ */
+async function lookUpSessionTitle(sessionId: string): Promise<string | undefined> {
+  return await lookUpHistoryTitle(sessionId) ?? await lookUpProjectedTitle(sessionId)
+}
+
+type TitleProjection = { projections?: { values?: { title?: unknown } } }
+
+function projectedSessionTitle(snapshot?: TitleProjection): string | undefined {
+  const title = snapshot?.projections?.values?.title
+  return typeof title === 'string' && title.trim() !== '' ? title : undefined
+}
+
+function gatewayValue<T>(envelope: unknown): T | undefined {
+  const result = (envelope as { result?: { ok?: boolean; value?: T } } | null | undefined)?.result
+  return result?.ok === true ? result.value : undefined
+}
+
+async function lookUpProjectedTitle(sessionId: string): Promise<string | undefined> {
+  try {
+    const listed = gatewayValue<{ items?: Array<TitleProjection & { sessionId?: unknown }> }>(
+      await gatewayRpc('session.list', {}),
+    )
+    return projectedSessionTitle(listed?.items?.find((item) => item.sessionId === sessionId))
+  } catch {
+    return undefined
+  }
+}
+
+/** The projection carries older titles even when the first message window omits the rename event. */
+async function lookUpHistoryTitle(sessionId: string): Promise<string | undefined> {
+  try {
+    const history = gatewayValue<TitleProjection & { events?: unknown[] }>(
+      await gatewayRpc('session.history', { sessionId, maxMessages: 1 }),
+    )
+    const title = projectedSessionTitle(history)
+    if (title !== undefined) return title
+    const events = Array.isArray(history?.events) ? history.events : []
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const entry = events[index]
+      if (typeof entry !== 'object' || entry === null) continue
+      let event: unknown = (entry as { event?: unknown }).event ?? entry
+      if (typeof event === 'object' && event !== null && (event as { type?: unknown }).type === 'event') {
+        event = (event as { event?: unknown }).event
+      }
+      if (typeof event !== 'object' || event === null) continue
+      const typed = event as { type?: unknown; data?: { title?: unknown } }
+      if (typed.type !== 'session/title') continue
+      const title = typed.data?.title
+      if (typeof title === 'string' && title.trim() !== '') return title
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Gateway RPC with a helpful error when the bridge is down. */
@@ -1597,6 +1693,16 @@ chrome.runtime.onConnect.addListener((port) => {
         broadcastSelection(windowId)
         break
       }
+      case 'session.title': {
+        // The panel replays durable titles from session.history; live updates
+        // arrive through the bridge event pump above.
+        const titled = message as { sessionId?: unknown; title?: unknown }
+        void sessionTabGroups.rememberTitle(
+          typeof titled.sessionId === 'string' ? titled.sessionId : undefined,
+          typeof titled.title === 'string' ? titled.title : undefined,
+        )
+        break
+      }
       case 'session.active': {
         const session = message as { sessionId?: unknown; isNew?: boolean }
         recentSession.remember(session.sessionId)
@@ -1609,8 +1715,9 @@ chrome.runtime.onConnect.addListener((port) => {
           if (session.isNew === true && tabAffinity.getSessionTab(sid) === undefined) {
             const bind = affinityReady.then(async () => {
               if (tabAffinity.getSessionTab(sid) !== undefined) return
-              const dedicated = await createDedicatedTabForSession(sid, { url: 'about:blank', active: true })
+              const dedicated = await createDedicatedTabForSession(sid, sid, true)
               if (dedicated === null) {
+                if (sessionTabGroups.available) return
                 const tab = await syncActiveTab()
                 const summary = tab === undefined ? null : summarizeTab(tab)
                 if (summary === null) throw new Error('No active tab is available to bind this session')
@@ -1629,7 +1736,11 @@ chrome.runtime.onConnect.addListener((port) => {
           } else if (tabAffinity.focusSession(sid)) {
             const sTab = tabAffinity.getSessionTab(sid)
             if (sTab?.tabId !== undefined && typeof chrome?.tabs?.update === 'function') {
-              chrome.tabs.update(sTab.tabId, { active: true }).catch(() => {})
+              void sessionTabGroups.containsTab(sTab.tabId).then((grouped) => {
+                if (!grouped && tabAffinity.focusedSession() === sid && tabAffinity.getSessionTab(sid)?.tabId === sTab.tabId) {
+                  return chrome.tabs.update(sTab.tabId, { active: true })
+                }
+              }).catch(() => {})
             }
             persistTabAffinity()
             broadcastTabAffinity()

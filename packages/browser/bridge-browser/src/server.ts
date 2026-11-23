@@ -184,6 +184,7 @@ export class BridgeServer {
    * @param signal - caller cancellation (abort settles the call as cancelled).
    * @param timeoutMs - per-call budget; defaults to the plugin config value.
    * @param sessionId - optional owning Agent session for approval continuity.
+   * @param group - optional root session and display title for native tab grouping.
    * @returns the extension's action result.
    * @throws BridgeToolError when no extension is connected, the call times
    *   out, is cancelled, or the extension reports a failure.
@@ -194,6 +195,7 @@ export class BridgeServer {
     signal: AbortSignal,
     timeoutMs: number = this.deps.toolTimeoutMs,
     sessionId?: string,
+    group?: { sessionId?: string; title?: string },
   ): Promise<unknown> {
     const conn = this.current
     if (conn === null) {
@@ -237,6 +239,8 @@ export class BridgeServer {
         args,
         expiresAt,
         ...(sessionId === undefined ? {} : { sessionId }),
+        ...(group?.sessionId === undefined ? {} : { groupSessionId: group.sessionId }),
+        ...(group?.title === undefined ? {} : { groupTitle: group.title }),
       } satisfies BridgeFrame), (error) => {
         /* v8 ignore next -- teardown race: when the write fails, the socket's
         close handler settles the same call with the same code; the callback

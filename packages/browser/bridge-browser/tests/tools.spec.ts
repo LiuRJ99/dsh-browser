@@ -22,9 +22,16 @@ describe('registerBrowserTools', () => {
     return file
   }
 
-  function makeHarness() {
+  function makeHarness(agents?: Context['agents'], titles: ReadonlyMap<string, string> = new Map()) {
     const registered: { name: string; definition: Record<string, unknown> }[] = []
     const ctx = {
+      agents,
+      get: (name: string) => name === 'sessionTitle' ? {
+        get: (session: { id: string }) => {
+          const title = titles.get(session.id)
+          return title === undefined ? undefined : { title }
+        },
+      } : undefined,
       tools: {
         register: vi.fn((definition: { name: string }) => {
           registered.push({ name: definition.name, definition: definition as Record<string, unknown> })
@@ -56,6 +63,34 @@ describe('registerBrowserTools', () => {
     await (tool.definition.execute as (args: unknown, exec: unknown) => Promise<unknown>)(args, exec)
     expect(requestTool).toHaveBeenCalledWith('browser_open_tab', args, exec.signal, 1_000, 'session-background')
     expect(tool.definition.parameters).toMatchObject({ properties: { active: { type: 'boolean' } } })
+  })
+
+  it('sends the root Bot session title for grouping and each calling agent for routing', async () => {
+    const main = { id: 'session-main', session: { id: 'session-main' } }
+    const child = { id: 'session-child', session: { id: 'session-child' } }
+    const nested = { id: 'session-nested', session: { id: 'session-nested' } }
+    const unrelated = { id: 'session-unrelated', session: { id: 'session-unrelated' } }
+    const botName = '环境运维助手'
+    const parents = new Map([[child.id, main], [nested.id, child]])
+    const { ctx, bridge, requestTool, registered } = makeHarness({
+      list: () => [main, unrelated, child, nested],
+      isOwnedBy: (id: string, candidate: typeof main) => parents.get(id) === candidate,
+    } as unknown as Context['agents'], new Map([[main.id, botName], [child.id, '子任务标题']]))
+    registerBrowserTools(ctx, bridge, { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60 })
+    const tool = registered.find(r => r.name === 'browser_open_tab')!
+    const run = tool.definition.execute as (args: unknown, exec: unknown) => Promise<unknown>
+    const signal = new AbortController().signal
+    const args = { url: 'https://docs.example/' }
+    await run(args, { agent: main, signal })
+    await run(args, { agent: child, signal })
+    await run(args, { agent: nested, signal })
+    await run(args, { agent: unrelated, signal })
+    expect(requestTool.mock.calls).toEqual([
+      ['browser_open_tab', args, signal, 1_000, main.id, { title: botName }],
+      ['browser_open_tab', args, signal, 1_000, child.id, { sessionId: main.id, title: botName }],
+      ['browser_open_tab', args, signal, 1_000, nested.id, { sessionId: main.id, title: botName }],
+      ['browser_open_tab', args, signal, 1_000, unrelated.id],
+    ])
   })
 
   it('executes browser_click with mapped args', async () => {

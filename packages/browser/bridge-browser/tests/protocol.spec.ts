@@ -31,6 +31,11 @@ describe('parseBridgeFrame', () => {
       .toEqual({ t: 'event', frame: { rpcId: 'r', method: 'turn/start', payload: {} } })
     expect(parseBridgeFrame(JSON.stringify({ t: 'tool.call', id: '4', name: 'browser_click', args: { index: 1 }, expiresAt: 123, sessionId: 'session-1' })))
       .toEqual({ t: 'tool.call', id: '4', name: 'browser_click', args: { index: 1 }, expiresAt: 123, sessionId: 'session-1' })
+    const childCall = { t: 'tool.call', id: '5', name: 'browser_open_tab', args: {}, expiresAt: 123, sessionId: 'session-child', groupSessionId: 'session-main', groupTitle: '环境运维助手' }
+    expect(parseBridgeFrame(JSON.stringify(childCall))).toEqual(childCall)
+    expect(parseBridgeFrame(JSON.stringify({ ...childCall, groupSessionId: ' ' }))).toBeUndefined()
+    expect(parseBridgeFrame(JSON.stringify({ ...childCall, groupTitle: ' ' }))).toBeUndefined()
+    expect(parseBridgeFrame(JSON.stringify({ ...childCall, sessionId: undefined }))).toBeUndefined()
     expect(parseBridgeFrame(JSON.stringify({ t: 'tool.cancel', id: '4' })))
       .toEqual({ t: 'tool.cancel', id: '4' })
   })

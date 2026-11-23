@@ -12,7 +12,7 @@
 
 ## DSH 0.2.0-rc.2 候选适配
 
-当前源码版本：`0.1.16-dev.1 (bridge 0.0.16-dev.1)`。Host 兼容范围：`>=0.2.0-rc.2`。bridge 与扩展须使用同一 release 的配套物料。
+当前源码版本为 `0.1.17-dev.1`，配套 bridge 为 `0.0.17-dev.1`。Host 兼容范围为 `>=0.2.0-rc.2`。bridge 与扩展须使用同一 release 的配套物料。
 
 545 项测试、类型检查、Chrome 构建及完整官方 npm Host 烟雾测试通过；覆盖桥发现、token 认证和重启后的会话恢复。
 
@@ -69,9 +69,9 @@ Playwright / 扩展的配对耗时比为 **1.24**（95% CI **1.16–1.34**）：
 | 发送图片 | `session.prompt` / `session.attachment` | 按宿主能力启用图片草稿、纯图片消息和持久历史预览 |
 | 引用选中内容 | 侧栏输入框 | 在页面里划选的文字会出现在输入框，随下一条消息一起发送，并带上来源与不可信内容边界 |
 
-## Fork 增强特性（v0.1.8）
+## Fork 增强特性
 
-> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支（仓库：[`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)，当前版本 `v0.1.8`）。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、内存治理、多标签页并发与权限治理进行了重点增强。
+> 本仓库为 [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) 的维护与增强分支，由 [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser) 维护。在完整保留官方文本化控制与低延迟优势的基础上，针对多 Agent 协作、内存治理、多标签页并发与权限治理进行了重点增强。
 
 ### 1. 本 Fork 安装方式
 
@@ -237,7 +237,7 @@ pnpm --filter dsh-browser-extension run test
 - 网页文字会标记为不可信输入。默认「自动共享」只按需读取受控标签页且不额外弹窗；对隐私敏感时可选择「每次询问」，或用「关闭」完全阻断读取。在「每次询问」模式下，读取弹窗可以仅允许一次，也可以持久切回自动读取；之后仍可在设置中关闭。读取的页面文字会发送给当前选择的模型。
 - 点击、输入、文件上传、按键、普通导航、JavaScript 执行和刷新统一使用 origin 信任逻辑。历史前进/后退因目标未知使用当前会话级权限；绑定/跟随标签页沿用目标标签页的 origin 信任；`browser_close_tab` 始终重新询问。`browser_list_tabs` 遵循页面共享策略：自动共享不弹窗、每次询问弹窗、关闭时阻断。普通 origin 可在当前侧栏会话中临时信任，或在审批框/设置中加入永久可信名单；会话级历史权限不写入永久设置，并在侧栏租约、桥接代际或会话结束时清除。文件上传沿用目标 origin 的信任策略，但审批摘要仍会隐藏本地路径。显式跨域 `browser_navigate` 仍要求所有已知来源可信，未知历史目标使用会话级权限。
 
-`browser_open_tab` 支持通过 `active:false` 在后台打开并绑定标签页，不抢占浏览器焦点；仍需审批，并保持会话间的标签页隔离。
+在 Chrome 中，主 agent 和它的子 agent 共用一个原生标签组，每个 agent 各自绑定受控页。组名使用主会话标题，ds-bot 的 Bot 私聊组因此显示 Bot 名称。新组默认折叠，agent 的 `browser_open_tab` 默认在后台开页，并保留标签组当前的展开或折叠状态。需要切到前台时可传 `active:true`。`browser_list_tabs` 用 `inSessionGroup` 标记本任务组内的页面。显式绑定已有标签页时，页面留在原处，各工具遵循原有审批规则。Chrome 和 Firefox 都支持通过 `active:false` 指定后台开页。
 
 ## Host 兼容策略
 

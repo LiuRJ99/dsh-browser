@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from 'vitest'
-import { RecentSessionTracker, sessionIdFromFrame } from '../src/background/session-continuity.ts'
+import { RecentSessionTracker, sessionIdFromFrame, sessionTitleFromFrame } from '../src/background/session-continuity.ts'
 
 describe('RecentSessionTracker', () => {
   it('restores and persists the latest browser session', async () => {
@@ -59,6 +59,42 @@ describe('sessionIdFromFrame', () => {
     expect(sessionIdFromFrame({
       t: 'event',
       frame: { rpcId: '2', method: 'session/subscribed', payload: { sessionId: 'session-2' } },
+    })).toBeUndefined()
+  })
+})
+
+describe('sessionTitleFromFrame', () => {
+  it('reads the durable title carried by a session/title event', () => {
+    expect(sessionTitleFromFrame({
+      t: 'event',
+      frame: {
+        rpcId: '1',
+        method: 'session/event',
+        payload: { sessionId: 'session-1', event: { type: 'session/title', data: { title: '环境运维助手' } } },
+      },
+    })).toEqual({ sessionId: 'session-1', title: '环境运维助手' })
+  })
+
+  it('ignores other session events and blank titles', () => {
+    expect(sessionTitleFromFrame({
+      t: 'event',
+      frame: {
+        rpcId: '2',
+        method: 'session/event',
+        payload: { sessionId: 'session-1', event: { type: 'turn/start' } },
+      },
+    })).toBeUndefined()
+    expect(sessionTitleFromFrame({
+      t: 'event',
+      frame: {
+        rpcId: '3',
+        method: 'session/event',
+        payload: { sessionId: 'session-1', event: { type: 'session/title', data: { title: '   ' } } },
+      },
+    })).toBeUndefined()
+    expect(sessionTitleFromFrame({
+      t: 'event',
+      frame: { rpcId: '4', method: 'session/event', payload: { event: { type: 'session/title', data: { title: 'x' } } } },
     })).toBeUndefined()
   })
 })

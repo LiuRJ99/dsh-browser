@@ -638,7 +638,8 @@ describe("background tab opening", () => {
 
     const runtimeListeners = new Set<(message: unknown, sender: chrome.runtime.MessageSender) => void>()
     const create = vi.fn(async () => ({ id: 42, windowId: 9, url: '' }))
-    const update = vi.fn(async () => ({ id: 42, windowId: 9, url: 'https://docs.example/' }))
+    const update = vi.fn(async () => ({ id: 42, windowId: 9, url: 'chrome://newtab/' }))
+    const get = vi.fn(async () => ({ id: 42, windowId: 9, url: 'https://docs.example/' }))
     const remove = vi.fn(async () => undefined)
     const sendMessage = vi.fn(async () => ({
       type: 'DSH_RESULT',
@@ -648,7 +649,7 @@ describe("background tab opening", () => {
       frameId: 0, parentFrameId: -1, documentId: 'doc-42', url: 'https://docs.example/',
     }])
     vi.stubGlobal('chrome', {
-      tabs: { create, update, remove, sendMessage, query: vi.fn(async () => []) },
+      tabs: { create, update, get, remove, sendMessage, query: vi.fn(async () => []) },
       scripting: { executeScript: vi.fn(async () => [{ frameId: 0, result: undefined }]) },
       webNavigation: { getAllFrames },
       runtime: {
@@ -674,7 +675,7 @@ describe("background tab opening", () => {
     }
     const open = dispatchOpenTab(
       { id: 'open-bg', name: 'browser_open_tab', args: { url: 'https://docs.example/', active: false } },
-      9,
+      (active) => chrome.tabs.create({ active, windowId: 9 }),
       'auto',
       { maxItems: 60, maxChars: 12_000 },
       async () => 'approved',
@@ -707,7 +708,7 @@ describe("background tab opening", () => {
     expect(affinity.snapshot()).toMatchObject({
       status: 'background',
       active: { tabId: 1 },
-      controlled: { tabId: 42 },
+      controlled: { tabId: 42, url: 'https://docs.example/' },
     })
     expect(affinity.resolveTarget('session-bg')).toMatchObject({
       kind: 'target',

@@ -443,10 +443,11 @@ describe('BridgeServer', () => {
     const { ws, frames } = await connect(h.url)
     send(ws, { t: 'hello', token: TOKEN, caps: { textOnly: true, snapshotMaxChars: 12000, maxInteractiveItems: 60 } })
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
-    const result = h.bridge.requestTool('browser_click', { index: 1 }, new AbortController().signal)
+    const result = h.bridge.requestTool('browser_click', { index: 1 }, new AbortController().signal, undefined, 'session-child', { sessionId: 'session-main', title: '环境运维助手' })
     await waitFor(() => frames.some((f) => f.t === 'tool.call'))
     const call = frames.find((f) => f.t === 'tool.call') as Extract<BridgeFrame, { t: 'tool.call' }>
     expect(call.name).toBe('browser_click')
+    expect(call).toMatchObject({ sessionId: 'session-child', groupSessionId: 'session-main', groupTitle: '环境运维助手' })
     expect(call.args).toEqual({ index: 1 })
     send(ws, { t: 'tool.result', id: call.id, ok: true, result: { text: 'clicked' } })
     await expect(result).resolves.toEqual({ text: 'clicked' })

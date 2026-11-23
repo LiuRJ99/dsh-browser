@@ -100,7 +100,7 @@ export type ServerFrame =
   /** One extension-facing event frame projected from rc.1 Remote Events/session follow. */
   | { t: 'event'; frame: { rpcId: string; method: string; payload: unknown } }
   /** A model-requested browser action to execute in the user-controlled tab. */
-  | { t: 'tool.call'; id: string; name: string; args: Record<string, unknown>; expiresAt: number; sessionId?: string }
+  | { t: 'tool.call'; id: string; name: string; args: Record<string, unknown>; expiresAt: number; sessionId?: string; groupSessionId?: string; groupTitle?: string }
   /** Withdraw a tool call that timed out or whose caller was cancelled. */
   | { t: 'tool.cancel'; id: string }
   /** Liveness probe. */
@@ -205,6 +205,10 @@ export function parseBridgeFrame(text: string): BridgeFrame | undefined {
     case 'tool.call':
       if (frame.sessionId !== undefined
         && (typeof frame.sessionId !== 'string' || frame.sessionId.trim() === '')) return undefined
+      if (frame.groupSessionId !== undefined
+        && (frame.sessionId === undefined || typeof frame.groupSessionId !== 'string' || frame.groupSessionId.trim() === '')) return undefined
+      if (frame.groupTitle !== undefined
+        && (frame.sessionId === undefined || typeof frame.groupTitle !== 'string' || frame.groupTitle.trim() === '')) return undefined
       return typeof frame.id === 'string' && typeof frame.name === 'string'
         && typeof frame.args === 'object' && frame.args !== null && !Array.isArray(frame.args)
         && typeof frame.expiresAt === 'number' && Number.isFinite(frame.expiresAt) && frame.expiresAt > 0
@@ -215,6 +219,8 @@ export function parseBridgeFrame(text: string): BridgeFrame | undefined {
             args: frame.args as Record<string, unknown>,
             expiresAt: frame.expiresAt,
             ...(typeof frame.sessionId === 'string' ? { sessionId: frame.sessionId } : {}),
+            ...(typeof frame.groupSessionId === 'string' ? { groupSessionId: frame.groupSessionId } : {}),
+            ...(typeof frame.groupTitle === 'string' ? { groupTitle: frame.groupTitle } : {}),
           }
         : undefined
     case 'tool.cancel':

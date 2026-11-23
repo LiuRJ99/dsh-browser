@@ -985,7 +985,12 @@ export function App(): React.JSX.Element {
       .filter((ev): ev is SessionEventView => ev !== undefined && ev !== null)
     applyHistoryImageProjection(id, history.projections)
     const historyTitle = latestSessionTitle(events)
-    if (historyTitle !== undefined) setSessionTitle(historyTitle)
+    if (historyTitle !== undefined) {
+      setSessionTitle(historyTitle)
+      // Titles that only exist in this session's history never arrive as a live
+      // event, so the tab group would keep its fallback name without this push.
+      void api.reportSessionTitle(id, historyTitle).catch(() => {})
+    }
     setRows(mergeHistoryRows(events, nextSeq, locale))
   }
 

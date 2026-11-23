@@ -70,6 +70,24 @@ export function sessionIdFromFrame(frame: ServerFrame): string | undefined {
   return normalizeSessionId((frame.frame.payload as Record<string, unknown>).sessionId)
 }
 
+/**
+ * Read one durable session title from a live session-scoped event frame.
+ * The title names that session's browser tab group, so it has to survive the
+ * gap between group creation and the title the Host eventually assigns.
+ */
+export function sessionTitleFromFrame(frame: ServerFrame): { sessionId: string; title: string } | undefined {
+  const sessionId = sessionIdFromFrame(frame)
+  if (frame.t !== 'event' || sessionId === undefined) return undefined
+  const payload = frame.frame.payload as Record<string, unknown>
+  const event = payload.event
+  if (typeof event !== 'object' || event === null) return undefined
+  const typed = event as Record<string, unknown>
+  if (typed.type !== 'session/title') return undefined
+  const data = typed.data
+  const title = typeof data === 'object' && data !== null ? (data as Record<string, unknown>).title : undefined
+  return typeof title === 'string' && title.trim() !== '' ? { sessionId, title } : undefined
+}
+
 function normalizeSessionId(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() !== '' ? value : undefined
 }

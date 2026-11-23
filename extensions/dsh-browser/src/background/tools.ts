@@ -33,6 +33,10 @@ export interface ToolCall {
   expiresAt?: number
   /** Owning Agent session, when supplied by a current bridge. */
   sessionId?: string
+  /** Root session used only to choose the native Chrome tab group. */
+  groupSessionId?: string
+  /** Display title of the group session, when known by the Host. */
+  groupTitle?: string
 }
 
 /** The wire answer for one tool call. */
@@ -115,6 +119,8 @@ export interface TabManagementContext {
   unrestrictedAccess: boolean
   /** Controlled tab for the calling session, when one still exists. */
   controlledTabId?: number
+  /** Native group managed by this task, when available. */
+  sessionGroupId?: number
   /** Rebind subsequent tools to one existing tab without activating it. */
   followTab?: (tab: chrome.tabs.Tab) => void | Promise<void>
   /** Mark the point after which a state-changing operation cannot be withdrawn. */
@@ -626,6 +632,7 @@ async function dispatchTabManagementTool(
         index: tab.index,
         active: tab.active,
         controlled: tab.id === context.controlledTabId,
+        ...(context.sessionGroupId !== undefined && tab.groupId === context.sessionGroupId ? { inSessionGroup: true } : {}),
         title: tab.title ?? '',
         url: tabUrl(tab),
       }))
@@ -864,7 +871,7 @@ async function removeCreatedTab(tabId: number): Promise<void> {
  */
 export async function dispatchOpenTab(
   call: ToolCall,
-  windowId: number,
+  createTab: (active: boolean) => Promise<chrome.tabs.Tab>,
   sharePageContent: 'ask' | 'auto' | 'off',
   budget: ContentBudget | undefined,
   authorize: ((prompt: ApprovalPrompt) => Promise<ApprovalAuthorization>) | undefined,
@@ -888,7 +895,7 @@ export async function dispatchOpenTab(
 
   let created: chrome.tabs.Tab
   try {
-    created = await chrome.tabs.create({ active, windowId })
+    created = await createTab(active)
   } catch (error: unknown) {
     return { ok: false, error: { code: 'action-failed', message: error instanceof Error ? error.message : 'Failed to open a new browser tab.' } }
   }
@@ -903,19 +910,22 @@ export async function dispatchOpenTab(
 
   const navigationWait = waitForNextDocumentReady(tabId, 0, undefined, signal)
   try {
-    created = await chrome.tabs.update(tabId, { url: parsed.href })
+    await chrome.tabs.update(tabId, { url: parsed.href })
   } catch (error: unknown) {
     navigationWait.cancel()
     await removeCreatedTab(tabId)
     return { ok: false, error: { code: 'action-failed', message: error instanceof Error ? error.message : 'Failed to navigate the new browser tab.' } }
   }
   const ready = await navigationWait.ready
+  // tabs.update can return the old document even when the new one is ready now.
+  const current = await chrome.tabs.get(tabId).catch(() => undefined)
   if (isCancelled(call, signal)) {
     await removeCreatedTab(tabId)
     return cancelled()
   }
+  if (current === undefined) return unavailable('The new tab closed before it could be bound.')
   commitAction?.()
-  if (!bindCreatedTab(created)) {
+  if (!bindCreatedTab(current)) {
     await removeCreatedTab(tabId)
     return { ok: false, error: { code: 'action-failed', message: 'The new tab could not become the controlled browser target.' } }
   }

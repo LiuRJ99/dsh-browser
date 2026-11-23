@@ -1,3 +1,9 @@
+## 0.1.17-dev.1 — 2026-11-23
+
+- Chrome 按主任务建立默认折叠的标签组。主 agent 与子 agent 同组，各自控制自己的页面。
+- 组名使用主会话标题。DS Bot 私聊显示 Bot 名称，旧 Bridge 的标题投影也可用于更新已有编号组。
+- 后台开页和恢复会话保留当前前台页面。Chrome 已加载的新页使用最新标签信息绑定。
+
 ## 0.1.15-dev.1 — 2026-10-18
 
 Pass the Connection-owned Peer through Gateway calls, streams and forwarded-event replies on DSH 0.2.1-rc.1. Retain token authentication, session tab isolation, capability gates and approvals. Make legacy invariant registration optional and align the standalone runtime and extension release metadata.

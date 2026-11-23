@@ -116,7 +116,7 @@ pnpm --filter dsh-browser-extension run test
 
 ## 权限说明
 
-Chrome 使用 `sidePanel`，Firefox 使用 `sidebar_action`。两者都申请 `storage`（设置与最近会话续接）、`notifications`（侧栏关闭时可选的审批提醒）、`tabs` + `activeTab` + `scripting`（观察切页，并向用户显式选择的受控标签页注入/发消息；安装前已打开的页面也会按需补注入）、`webNavigation`（枚举该标签页中的 frame，并把消息绑定到具体文档）、`alarms`（后台保活）和 `http/https`（内容脚本注入普通网页）。Firefox AMO manifest 如实声明扩展会把浏览活动、网页内容/操作和对话内容发送给用户配置的 dsh/模型服务。扩展绝不强制切换用户正在看的标签页；默认也不会静默跟随手动切页，但开启「自动跟随当前标签页」后会在不改变可见页面的前提下切换助手的受控目标。默认策略下，只有用户选择继续原页面后，助手才会在后台操作。
+Chrome 使用 `sidePanel`，并申请 `tabGroups` 来管理和折叠各 agent 的工作标签组。Firefox 使用 `sidebar_action`。两者都申请 `storage`（设置与最近会话续接）、`notifications`（侧栏关闭时可选的审批提醒）、`tabs` + `activeTab` + `scripting`（观察切页，并向用户显式选择的受控标签页注入/发消息；安装前已打开的页面也会按需补注入）、`webNavigation`（枚举该标签页中的 frame，并把消息绑定到具体文档）、`alarms`（后台保活）和 `http/https`（内容脚本注入普通网页）。Firefox AMO manifest 如实声明扩展会把浏览活动、网页内容/操作和对话内容发送给用户配置的 dsh/模型服务。
 
 ## 已知限制
 

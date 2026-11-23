@@ -64,6 +64,7 @@ describe('attaching a page selection in the composer', () => {
       clearSelection: vi.fn(async () => {}),
       registerWindow: vi.fn(async () => {}),
       setActiveSession: vi.fn(async () => {}),
+      reportSessionTitle: vi.fn(async () => {}),
       updateSettings: vi.fn(async () => {}),
       requestStatus: vi.fn(async () => {}),
     }

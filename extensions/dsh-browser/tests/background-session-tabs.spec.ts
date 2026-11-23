@@ -85,6 +85,7 @@ function mockChrome(options: {
   trustedActionOriginsVersion?: 1
   sharePageContent?: 'ask' | 'auto' | 'off'
   localSet?: (items: Record<string, unknown>) => Promise<void>
+  nativeTabGroups?: boolean
 } = {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
   const onMessage = chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>()
@@ -94,7 +95,10 @@ function mockChrome(options: {
   const onReplaced = chromeEvent<[number, number]>()
 
   let nextTabId = 10
+  let nextGroupId = 20
   const tabStore = new Map<number, chrome.tabs.Tab>()
+  const groups = new Map<number, chrome.tabGroups.TabGroup>()
+  const sessionStorage = new Map<string, unknown>()
   const initialActive = tab(1)
   tabStore.set(1, initialActive)
 
@@ -126,6 +130,33 @@ function mockChrome(options: {
     return existing
   })
 
+  const group = vi.fn(async ({ tabIds, groupId }: chrome.tabs.GroupOptions) => {
+    if (tabIds === undefined) throw new Error('Expected a tab ID to group')
+    const ids = Array.isArray(tabIds) ? tabIds : [tabIds]
+    const id = groupId ?? ++nextGroupId
+    if (groupId === undefined) groups.set(id, { id, windowId: 1, color: 'grey', collapsed: false })
+    for (const tabId of ids) {
+      const member = tabStore.get(tabId)
+      if (member === undefined || !groups.has(id)) throw new Error('No tab or group')
+      member.groupId = id
+    }
+    return id
+  })
+  const tabGroups = {
+    query: vi.fn(async ({ title }: chrome.tabGroups.QueryInfo) => (
+      [...groups.values()].filter((item) => title === undefined || item.title === title)
+    )),
+    get: vi.fn(async (id: number) => {
+      const existing = groups.get(id)
+      if (existing === undefined) throw new Error('No group')
+      return existing
+    }),
+    update: vi.fn(async (id: number, changes: chrome.tabGroups.UpdateProperties) => {
+      const updated = { ...await tabGroups.get(id), ...changes }
+      groups.set(id, updated)
+      return updated
+    }),
+  }
   const query = vi.fn(async () => [tabStore.get(1) ?? initialActive])
   const sendMessage = vi.fn(async (tabId: number, message: unknown) => {
     if ((message as { type?: string }).type === 'DSH_ACTION') {
@@ -153,6 +184,7 @@ function mockChrome(options: {
       executeScript: vi.fn(async () => []),
     },
     sidePanel: { open: vi.fn(async () => {}), setPanelBehavior: vi.fn(async () => {}) },
+    ...(options.nativeTabGroups ? { tabGroups } : {}),
     storage: {
       local: {
         get: vi.fn(async () => ({
@@ -168,13 +200,16 @@ function mockChrome(options: {
         set: localSet,
       },
       session: {
-        get: vi.fn(async () => ({})),
-        set: vi.fn(async () => {}),
-        remove: vi.fn(async () => {}),
+        get: vi.fn(async (key: string) => options.nativeTabGroups ? { [key]: sessionStorage.get(key) } : {}),
+        set: vi.fn(async (items: Record<string, unknown>) => {
+          for (const [key, value] of Object.entries(items)) sessionStorage.set(key, value)
+        }),
+        remove: vi.fn(async (key: string) => { sessionStorage.delete(key) }),
       },
     },
     tabs: {
       create,
+      ...(options.nativeTabGroups ? { group } : {}),
       remove,
       update,
       get,
@@ -208,6 +243,9 @@ function mockChrome(options: {
     tabStore,
     onActivated,
     localSet,
+    groups,
+    group,
+    tabGroups,
   }
 }
 
@@ -378,16 +416,22 @@ describe('per-session tab management and isolation', () => {
     })
   })
 
-  it.each(['background-session', 'another-session'])('opens a background tab for %s through the real worker without stealing focus or losing session isolation', async (callingSession) => {
-    const chromeMock = mockChrome()
+  it.each([
+    ['background-session', false, undefined, undefined],
+    ['another-session', false, undefined, undefined],
+    ['background-session', true, undefined, undefined],
+    ['another-session', true, undefined, '资料检索 Bot'],
+    ['subagent-session', true, 'background-session', '环境运维助手'],
+  ])('keeps %s in the background with grouping %s and root %s', async (callingSession, nativeTabGroups, groupSessionId, groupTitle) => {
+    const chromeMock = mockChrome({ nativeTabGroups })
     const { panel, ws } = await prepareToolApprovalTest(chromeMock, 'background-session')
     // Preserve an unrelated foreground tab while the session opens its target.
     chromeMock.onActivated.emit({ tabId: 1, windowId: 1 })
     await vi.waitFor(() => { expect(affinityStates(panel.postMessage).at(-1)?.active?.tabId).toBe(1) })
     panel.postMessage.mockClear()
     ws.receive({ t: 'tool.call', id: 'background-open', name: 'browser_open_tab',
-      args: { url: 'https://opened.example/path', active: false }, sessionId: callingSession,
-      expiresAt: Date.now() + 10000 })
+      args: { url: 'https://opened.example/path', ...(nativeTabGroups ? {} : { active: false }) }, sessionId: callingSession,
+      groupSessionId, groupTitle, expiresAt: Date.now() + 10000 })
     await vi.waitFor(() => {
       expect(panel.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'approval.request' }))
     })
@@ -402,14 +446,181 @@ describe('per-session tab management and isolation', () => {
       expect(ws.sent.map(raw => JSON.parse(raw))).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'background-open', ok: true }))
       expect(affinityStates(panel.postMessage).at(-1)).toMatchObject({ controlled: { tabId: callingSession === 'background-session' ? 12 : 11 }, active: { tabId: 1 } })
     })
-    expect(chromeMock.create).toHaveBeenCalledWith({ active: false, windowId: 1 })
+    expect(chromeMock.create).toHaveBeenCalledWith({ url: 'about:blank', active: false, windowId: 1 })
     expect(chromeMock.remove).not.toHaveBeenCalledWith(11) // This fixture's previous tab has page content.
     expect(chromeMock.remove).not.toHaveBeenCalledWith(1)
+    if (nativeTabGroups) {
+      const panelGroup = chromeMock.tabStore.get(11)!.groupId
+      const toolGroup = chromeMock.tabStore.get(12)!.groupId
+      expect(chromeMock.groups.get(panelGroup)).toMatchObject({ collapsed: true })
+      expect(chromeMock.groups.get(toolGroup)).toMatchObject({ collapsed: true })
+      if (groupTitle !== undefined) expect(chromeMock.groups.get(toolGroup)?.title).toBe(groupTitle)
+      expect(toolGroup === panelGroup).toBe((groupSessionId ?? callingSession) === 'background-session')
+      expect(chromeMock.tabStore.get(1)?.groupId).toBeUndefined()
+      panel.onMessage.emit({ type: 'session.active', sessionId: callingSession })
+      await vi.waitFor(() => { expect(affinityStates(panel.postMessage).at(-1)?.controlled?.tabId).toBe(12) })
+      expect(chromeMock.update).not.toHaveBeenCalledWith(12, { active: true })
+    }
     chromeMock.sendMessage.mockClear()
     ws.receive({ t: 'tool.call', id: 'background-snapshot', name: 'browser_snapshot', args: {},
-      sessionId: callingSession, expiresAt: Date.now() + 10000 })
+      sessionId: callingSession, groupSessionId, expiresAt: Date.now() + 10000 })
     await vi.waitFor(() => { expect(chromeMock.sendMessage).toHaveBeenCalledWith(12, expect.objectContaining({ type: 'DSH_ACTION' }), expect.anything()) })
     expect(chromeMock.sendMessage.mock.calls.every(([id]) => id === 12)).toBe(true)
+  })
+
+  it('creates the first controlled tab of a subagent inside its root group', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { panel, ws } = await prepareToolApprovalTest(chromeMock, 'session-main')
+    ws.receive({ t: 'tool.call', id: 'first-child-tool', name: 'browser_snapshot', args: {},
+      sessionId: 'session-child', groupSessionId: 'session-main', expiresAt: Date.now() + 10000 })
+    await vi.waitFor(() => {
+      expect(ws.sent.map(raw => JSON.parse(raw))).toContainEqual(expect.objectContaining({ id: 'first-child-tool', ok: true }))
+    })
+    expect(chromeMock.tabStore.get(12)!.groupId).toBe(chromeMock.tabStore.get(11)!.groupId)
+    expect(chromeMock.sendMessage).toHaveBeenCalledWith(12, expect.objectContaining({ type: 'DSH_ACTION' }), expect.anything())
+    expect(affinityStates(panel.postMessage).at(-1)?.controlled?.tabId).toBe(11)
+  })
+
+  it('creates one group for concurrent opens and reuses its saved ID without re-collapsing it', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups } = await import('../src/background/session-tab-groups.ts')
+    const groups = new SessionTabGroups()
+    const [first, second] = await Promise.all([
+      groups.createTab('agent-one', {}),
+      groups.createTab('agent-one', {}),
+    ])
+    expect(first.groupId).toBe(second.groupId)
+    expect(chromeMock.create).toHaveBeenCalledWith({ active: false })
+    expect(chromeMock.groups.get(first.groupId)).toMatchObject({ collapsed: true })
+    await chromeMock.tabGroups.update(first.groupId, { collapsed: false })
+
+    const restored = new SessionTabGroups()
+    const next = await restored.createTab('agent-one', { active: false })
+    expect(next.groupId).toBe(first.groupId)
+    expect(chromeMock.groups.get(first.groupId)).toMatchObject({ collapsed: false })
+    expect(chromeMock.groups.size).toBe(1)
+  })
+
+  it('names the tab group after the session title and renames it when the title arrives later', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups, formatGroupTitle } = await import('../src/background/session-tab-groups.ts')
+
+    expect(formatGroupTitle(undefined, 'session-abc')).toBe('DSH · abc')
+    expect(formatGroupTitle(undefined, `session-${'a'.repeat(20)}`)).toBe('DSH · aaaaaaaa')
+    expect(formatGroupTitle('  环境 \n 运维助手 ', 'session-abc')).toBe('环境 运维助手')
+    expect(formatGroupTitle('x'.repeat(40), 'session-abc')).toBe('x'.repeat(40))
+
+    const groups = new SessionTabGroups()
+    const before = await groups.createTab('session-abc', { active: false })
+    expect(chromeMock.groups.get(before.groupId)).toMatchObject({ title: 'DSH · abc' })
+
+    await groups.rememberTitle('session-abc', '环境运维助手')
+    expect(chromeMock.groups.get(before.groupId)).toMatchObject({ title: '环境运维助手' })
+
+    await groups.rememberTitle('session-new', '另一个会话')
+    const after = await groups.createTab('session-new', { active: false })
+    expect(chromeMock.groups.get(after.groupId)).toMatchObject({ title: '另一个会话' })
+    expect(chromeMock.groups.size).toBe(2)
+  })
+
+  it('renames an existing fallback-named group after the Host title lookup', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups } = await import('../src/background/session-tab-groups.ts')
+
+    const plain = new SessionTabGroups()
+    const first = await plain.createTab('session-lookup', { active: false })
+    expect(chromeMock.groups.get(first.groupId)).toMatchObject({ title: 'DSH · lookup' })
+
+    let answer!: (value: string) => void
+    const titled = new SessionTabGroups({
+      resolveTitle: async () => await new Promise<string>((resolve) => { answer = resolve }),
+    })
+    const second = await titled.createTab('session-lookup', { active: false })
+    expect(second.groupId).toBe(first.groupId)
+    expect(chromeMock.groups.get(first.groupId)).toMatchObject({ title: 'DSH · lookup' })
+
+    answer('环境运维助手')
+    await vi.waitFor(() => {
+      expect(chromeMock.groups.get(first.groupId)).toMatchObject({ title: '环境运维助手' })
+    })
+  })
+
+  it('keeps a newer title received while an older lookup is pending', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups } = await import('../src/background/session-tab-groups.ts')
+    let answer!: (value: string) => void
+    const groups = new SessionTabGroups({
+      resolveTitle: () => new Promise<string>((resolve) => { answer = resolve }),
+    })
+    const tab = await groups.createTab('session-rename', {})
+    await groups.rememberTitle('session-rename', '新的 Bot 名称')
+    answer('旧的 Bot 名称')
+    // The next open reuses both the group and the saved title from the live update.
+    await groups.createTab('session-rename', {})
+    expect(chromeMock.groups.get(tab.groupId)).toMatchObject({ title: '新的 Bot 名称', collapsed: true })
+  })
+
+  it('adopts the existing group after the worker loses its stored ids', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups } = await import('../src/background/session-tab-groups.ts')
+
+    const first = await new SessionTabGroups().createTab('session-adopt', { active: false })
+    // Simulate a worker restart that dropped chrome.storage.session.
+    await chrome.storage.session.remove('dshSessionTabGroups')
+
+    const adopted = new SessionTabGroups({
+      resolveGroup: async () => first.groupId,
+      resolveTitle: async () => '环境运维助手',
+    })
+    const next = await adopted.createTab('session-adopt', { active: false })
+    expect(next.groupId).toBe(first.groupId)
+    expect(chromeMock.groups.size).toBe(1)
+    await vi.waitFor(() => {
+      expect(chromeMock.groups.get(first.groupId)).toMatchObject({ title: '环境运维助手' })
+    })
+  })
+
+  it('renames and reuses a fallback group using the history projection from an older bridge', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const sessionId = 'session-old-bot'
+    const groupId = 17
+    chromeMock.groups.set(groupId, { id: groupId, windowId: 1, color: 'blue', collapsed: true, title: 'DSH · old-bot' })
+    const { ws } = await prepareToolApprovalTest(chromeMock, 'browser-panel-session')
+
+    ws.receive({ t: 'tool.call', id: 'first-bot-tool', name: 'browser_snapshot', args: {},
+      sessionId, expiresAt: Date.now() + 10000 })
+    const request = await vi.waitFor(() => {
+      const frame = ws.sent.map((raw) => JSON.parse(raw)).find((message) =>
+        message.t === 'rpc' && message.method === 'session.history' && message.payload.sessionId === sessionId)
+      expect(frame?.payload).toEqual({ sessionId, maxMessages: 1 })
+      return frame
+    })
+    ws.receive({ t: 'rpc.result', id: request.id, ok: true, result: {
+      type: 'server-response', rpcId: request.id, result: { ok: true, value: {
+        events: [], projections: { values: { title: '资料检索 Bot' } },
+      } },
+    } })
+
+    await vi.waitFor(() => {
+      expect(chromeMock.groups.get(groupId)).toMatchObject({ title: '资料检索 Bot', collapsed: true })
+    })
+    expect(chromeMock.tabStore.get(12)).toMatchObject({ groupId, active: false })
+    expect(chromeMock.groups.size).toBe(2)
+  })
+
+  it('keeps a group owned by the user separate when the controlled tab was attached', async () => {
+    const chromeMock = mockChrome({ nativeTabGroups: true })
+    const { SessionTabGroups } = await import('../src/background/session-tab-groups.ts')
+    const userGroup = { id: 17, windowId: 1, color: 'blue' as const, collapsed: false, title: '我的工作页' }
+    chromeMock.groups.set(userGroup.id, userGroup)
+    const groups = new SessionTabGroups({ resolveGroup: async () => userGroup.id })
+
+    await groups.rememberTitle('session-bot', '资料检索 Bot')
+    const opened = await groups.createTab('session-bot', {})
+
+    expect(opened.groupId).not.toBe(userGroup.id)
+    expect(chromeMock.groups.get(opened.groupId)).toMatchObject({ title: '资料检索 Bot', collapsed: true })
+    expect(chromeMock.groups.get(userGroup.id)).toEqual(userGroup)
   })
 
   it('recreates a dedicated tab when a session tab was closed and a new tool call arrives', async () => {
@@ -815,7 +1026,7 @@ describe('per-session tab management and isolation', () => {
         .filter((frame) => frame.t === 'tool.result')
       expect(results.some((result) => result.id === 'call-open-bound' && result.ok === true)).toBe(true)
     })
-    expect(chromeMock.create).toHaveBeenCalledWith({ active: true, windowId: 1 })
+    expect(chromeMock.create).toHaveBeenCalledWith({ url: 'about:blank', active: true, windowId: 1 })
     expect(chromeMock.sendMessage.mock.calls.some(([tabId, message]) =>
       tabId === 13 && (message as { action?: string }).action === 'browser_open_tab')).toBe(false)
   })

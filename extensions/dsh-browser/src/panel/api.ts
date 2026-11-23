@@ -130,6 +130,8 @@ export interface PanelApi {
   /** Scope this panel's selections to its own browser window. */
   registerWindow(windowId: number): Promise<void>
   setActiveSession(sessionId: string, isNew?: boolean): Promise<void>
+  /** Name this session's Chrome tab group after the durable session title. */
+  reportSessionTitle(sessionId: string, title: string): Promise<void>
   updateSettings(settings: Partial<PanelSettings>): Promise<void>
   requestStatus(): Promise<void>
 }
@@ -435,6 +437,9 @@ export function connectPanel(): PanelApi {
     },
     setActiveSession(sessionId, isNew) {
       return send({ type: 'session.active', sessionId, isNew })
+    },
+    reportSessionTitle(sessionId, title) {
+      return send({ type: 'session.title', sessionId, title })
     },
     updateSettings(next) {
       const id = crypto.randomUUID()

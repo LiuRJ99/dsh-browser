@@ -189,20 +189,55 @@ export function registerBrowserTools(
   options: BrowserToolsOptions,
 ): Map<string, () => void> {
   const disposers = new Map<string, () => void>()
-  const call = async (exec: Pick<ToolRunContext, 'agent' | 'signal'>, name: string, args: Record<string, unknown>): Promise<TextResult> => {
-    const sessionId = exec.agent === undefined ? undefined : String(exec.agent.id)
-    const result = sessionId === undefined
-      ? await bridge.requestTool(name, args, exec.signal, options.toolTimeoutMs)
-      : await bridge.requestTool(name, args, exec.signal, options.toolTimeoutMs, sessionId)
-    return normalizeTextResult(result, name)
+  const request: BrowserToolRequest = ({ agent, signal }, name, args) => {
+    if (agent === undefined) return bridge.requestTool(name, args, signal, options.toolTimeoutMs)
+    const sessionId = String(agent.id)
+    const root = rootAgentForTabGroup(ctx, agent)
+    const title = sessionTitleForTabGroup(ctx, root)
+    return root === agent && title === undefined
+      ? bridge.requestTool(name, args, signal, options.toolTimeoutMs, sessionId)
+      : bridge.requestTool(name, args, signal, options.toolTimeoutMs, sessionId, {
+          ...(root === agent ? {} : { sessionId: String(root.id) }),
+          ...(title === undefined ? {} : { title }),
+        })
   }
-
+  const call: Call = async (exec, name, args) => normalizeTextResult(await request(exec, name, args), name)
   for (const tool of defineTools(call, options)) {
     disposers.set(tool.name, ctx.tools.register(tool))
   }
-  const screenshot = defineScreenshotTool(bridge, options, options.screenshotDir ?? '/tmp/dsh-browser-screenshots')
+  const screenshot = defineScreenshotTool(request, options, options.screenshotDir ?? '/tmp/dsh-browser-screenshots')
   disposers.set(screenshot.name, ctx.tools.register(screenshot))
   return disposers
+}
+
+type BrowserAgent = NonNullable<ToolRunContext['agent']>
+
+function rootAgentForTabGroup(ctx: Context, agent: BrowserAgent): BrowserAgent {
+  const registry = ctx.agents
+  if (typeof registry?.isOwnedBy !== 'function') return agent
+  const agents = registry.list()
+  let child = agent
+  for (let depth = 0; depth < agents.length; depth += 1) {
+    const parent = agents.find((candidate) => registry.isOwnedBy(child.id, candidate))
+    if (parent === undefined) return child
+    child = parent
+  }
+  return agent
+}
+
+/** ds-bot records the Bot's configured name as the title of its own session. */
+function sessionTitleForTabGroup(ctx: Context, agent: BrowserAgent): string | undefined {
+  if (agent.session === undefined) return undefined
+  try {
+    const service = ctx.get('sessionTitle') as {
+      get(session: BrowserAgent['session']): { title: string } | undefined
+    } | undefined
+    const title = service?.get(agent.session)?.title.trim()
+    return title || undefined
+  } catch {
+    // The optional title service may be unavailable during startup or teardown.
+    return undefined
+  }
 }
 
 /** Normalize the extension's result payload to the canonical `{ text }` shape. */
@@ -216,6 +251,8 @@ function normalizeTextResult(result: unknown, name: string): TextResult {
 interface Call {
   (exec: Pick<ToolRunContext, 'agent' | 'signal'>, name: string, args: Record<string, unknown>): Promise<TextResult>
 }
+
+type BrowserToolRequest = (exec: Pick<ToolRunContext, 'agent' | 'signal'>, name: string, args: Record<string, unknown>) => Promise<unknown>
 
 /** The v1 tool set, model-perspective contracts only (no transport vocabulary). */
 function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[] {
@@ -348,10 +385,10 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
 
   const openTab = (): ToolDefinition => defineTool({
     name: 'browser_open_tab',
-    description: 'Open an HTTP(S) URL in a new browser tab and make it the controlled target for this session. Set active:false to keep the current tab in front.',
+    description: 'Open an HTTP(S) URL in a new controlled tab. Chrome groups the new tab with the main task; set active:false to keep the current tab in front on all browsers.',
     parameters: {
       url: { type: 'string', required: true, description: 'Complete http or https URL.' },
-      active: { type: 'boolean', description: 'Whether to activate the new tab (default true). False opens it in the background.' },
+      active: { type: 'boolean', description: 'Omit to open in the background for Chrome agent sessions, leaving collapsed groups closed. Set true to show the tab. Defaults to true outside Chrome agent sessions.' },
     },
     timeoutMs: options.toolTimeoutMs,
     output: TEXT_OUTPUT,
@@ -517,7 +554,7 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
 
   const listTabs = (): ToolDefinition => defineTool({
     name: 'browser_list_tabs',
-    description: 'List all open browser tabs with their ids, titles, and URLs.',
+    description: 'List all open browser tabs with their ids, titles, and URLs. Tabs in the calling task’s Chrome group are marked inSessionGroup.',
     parameters: {},
     timeoutMs: options.toolTimeoutMs,
     output: TEXT_OUTPUT,
@@ -568,7 +605,7 @@ function defineTools(call: Call, options: BrowserToolsOptions): ToolDefinition[]
  * before the model sees a result. Its output is still one text block (the file
  * path), keeping the surface text-only.
  */
-function defineScreenshotTool(bridge: BridgeServer, options: BrowserToolsOptions, screenshotDir: string): ToolDefinition {
+function defineScreenshotTool(request: BrowserToolRequest, options: BrowserToolsOptions, screenshotDir: string): ToolDefinition {
   return defineTool({
     name: 'browser_screenshot',
     description: 'Capture a viewport or full-page screenshot to disk and return the file path (the model sees no pixels).',
@@ -580,14 +617,11 @@ function defineScreenshotTool(bridge: BridgeServer, options: BrowserToolsOptions
     output: TEXT_OUTPUT,
     execute: async (args, exec) => {
       const a = args as { fullPage?: boolean; format?: 'png' | 'jpeg' }
-      const sessionId = exec.agent === undefined ? undefined : String(exec.agent.id)
       const payload = {
         fullPage: a.fullPage === true,
         format: a.format === 'jpeg' ? 'jpeg' : 'png',
       }
-      const result = sessionId === undefined
-        ? await bridge.requestTool('browser_screenshot', payload, exec.signal, options.toolTimeoutMs)
-        : await bridge.requestTool('browser_screenshot', payload, exec.signal, options.toolTimeoutMs, sessionId)
+      const result = await request(exec, 'browser_screenshot', payload)
       const data = (result as { data?: unknown } | undefined)?.data
       if (typeof data !== 'string' || data === '') {
         return { text: `browser_screenshot returned no image data: ${JSON.stringify(result)}` }

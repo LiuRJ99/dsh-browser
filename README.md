@@ -12,7 +12,7 @@ Browser operation remains text-only: pages become structured text with a numbere
 
 ## DSH 0.2.0-rc.2 candidate adaptation
 
-Current source version: `0.1.16-dev.1 (bridge 0.0.16-dev.1)`. Host compatibility: `>=0.2.0-rc.2`. Install matching bridge and extension artifacts from this release.
+Current source version is `0.1.17-dev.1` with bridge `0.0.17-dev.1`. Host compatibility is `>=0.2.0-rc.2`. Use the matching bridge and extension assets from this release.
 
 545 tests, type checks, Chrome build, and a smoke test against the complete official npm Host passed. The smoke test covers discovery, token authentication and session recovery after restart.
 
@@ -69,9 +69,9 @@ The paired Playwright / extension duration ratio was **1.24** (95% CI **1.16–1
 | Send images | `session.prompt` / `session.attachment` | Host-capability-gated image drafts, image-only prompts, and durable history previews |
 | Quote a selection | side panel composer | Text you highlight in the page appears in the composer and is sent with your next message as fenced, attributed page content |
 
-## Fork Enhancements (v0.1.8)
+## Fork Enhancements
 
-> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser), current version `v0.1.8`). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, heap memory stabilization, dedicated session tab isolation, and improved permission governance.
+> This repository is a maintained and enhanced fork of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (maintained at [`LiuRJ99/dsh-browser`](https://github.com/LiuRJ99/dsh-browser)). While retaining the upstream text-first design and low latency, it brings multi-tab coordination, heap memory stabilization, dedicated session tab isolation, and improved permission governance.
 
 ### 1. Installation from this Fork
 
@@ -237,7 +237,7 @@ Notes:
 - Page-authored text is wrapped as untrusted input. The default `auto` mode reads only the controlled tab without an extra prompt; privacy-sensitive users can select `ask` for per-read confirmation or `off` to block reads entirely. In `ask` mode, the read dialog can allow one read or persistently switch back to `auto`; this can be reversed in Settings. Read page text is sent to the selected model.
 - Click, type, file-upload, keypress, ordinary navigation, JavaScript execution, and reload calls use the same origin trust path. History navigation remains session-only because its destination is unknown; tab attach/follow use the target tab's origin trust. `browser_close_tab` always prompts. `browser_list_tabs` follows the page-sharing policy (`auto` silent, `ask` confirmed, `off` blocked). File uploads use the same destination-origin trust policy, while local paths remain redacted in approval summaries. Explicit cross-origin `browser_navigate` calls still require every known origin to be trusted, and unknown history destinations use the session grant.
 
-`browser_open_tab` accepts `active:false` to keep the visible tab in front while controlling the new background tab. Approval and session isolation still apply.
+In Chrome, each main agent and its subagents open work tabs in one native tab group. Each agent has its own controlled tab within the group. The group's name comes from the main session's title, which ds-bot sets to the Bot's name in its own chat. New groups start collapsed. Agent `browser_open_tab` calls open in the background by default and keep the group's current expanded or collapsed state. Use `active:true` to bring the new tab forward. `browser_list_tabs` marks tabs in the calling task's group with `inSessionGroup`. Existing tabs stay in place when explicitly attached, and browser tools follow the configured approval rules. `active:false` requests a background tab in either browser.
 
 ## Host compatibility policy
 

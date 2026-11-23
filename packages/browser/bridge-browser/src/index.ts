@@ -90,7 +90,7 @@ export interface Config {
   discoveryPort?: number
 }
 
-export const Config: z<Config> = z.object({
+export const Config = z.object({
   token: z.string(),
   toolTimeoutMs: z.number().step(1).min(1).default(DEFAULT_TOOL_TIMEOUT_MS),
   snapshotMaxChars: z.number().step(1).min(MIN_SNAPSHOT_MAX_CHARS).default(DEFAULT_SNAPSHOT_MAX_CHARS),
